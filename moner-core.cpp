@@ -311,7 +311,7 @@ void Core::Execute(const AsyncProgressQueueWorker<char>::ExecutionProgress& prog
 #if defined(HAVE_XOP)
     if (ci.has(xmrig::ICpuInfo::FLAG_XOP))     hint = "XOP";
 #endif
-#if defined(HAVE_AVX512F)
+#if defined(HAVE_AVX2)
     if (ci.has(xmrig::ICpuInfo::FLAG_AVX2))    hint = "AVX2";
 #endif
 #if defined(HAVE_AVX512F)
