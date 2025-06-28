@@ -3,11 +3,11 @@
 docker create --name moner moner-build &&\
 (test -d deploy && rm -rf deploy || true) &&\
 mkdir deploy &&\
-docker cp -L moner:/usr/local/lib/libpi_level_zero.so deploy &&\
-docker cp -L moner:/usr/local/lib/libpi_opencl.so deploy &&\
-docker cp -L moner:/usr/local/lib/libpi_unified_runtime.so deploy &&\
-docker cp -L moner:/usr/local/lib/libsycl.so.6 deploy &&\
-docker cp -L moner:/usr/local/lib/libze_loader.so.1 deploy &&\
+docker cp -L moner:/usr/local/lib/libsycl.so.8 deploy &&\
+docker cp -L moner:/usr/local/lib/libumf.so.0 deploy &&\
+docker cp -L moner:/usr/local/lib/libur_loader.so.0 deploy &&\
+docker cp -L moner:/usr/local/lib/libur_adapter_opencl.so.0 deploy &&\
+docker cp -L moner:/usr/local/lib/libur_adapter_level_zero.so.0 deploy &&\
 docker rm -f moner &&\
 cp moner.js pool.js opts.js helper.js deploy &&\
 cp -r node_modules deploy &&\

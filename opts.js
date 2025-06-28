@@ -1,11 +1,11 @@
-// Copyright GNU GPLv3 (c) 2023-2023 MoneroOcean <support@moneroocean.stream>
+// Copyright GNU GPLv3 (c) 2023-2025 MoneroOcean <support@moneroocean.stream>
 
 "use strict";
 
 const path = require("path");
 const h    = require(path.join(__dirname, 'helper.js'));
 
-const version_str = "0.1";
+const version_str = "0.1.1";
 
 module.exports.agent_str = "Moner v" + version_str;
 

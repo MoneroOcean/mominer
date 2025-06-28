@@ -1,10 +1,11 @@
-// Copyright GNU GPLv3 (c) 2023-2023 MoneroOcean <support@moneroocean.stream>
+// Copyright GNU GPLv3 (c) 2023-2025 MoneroOcean <support@moneroocean.stream>
 
 // SYCL cn/gpu miner prototype based on xmr-stak (https://github.com/fireice-uk/xmr-stak)
 // OpenCL mining code by wolf9466, fireice_uk and psychocrypt
 
-#include <sycl.hpp>
+#include <sycl/sycl.hpp>
 #include <chrono>
+#include <math.h>
 #include "sycl-lib-internal.h"
 #include "consts.h"
 
@@ -343,7 +344,7 @@ void cn_gpu(
         int32_t* const lpad = &lpads[nd.get_group().get_group_id() * CN_MEMORY4];
         uint32_t s = *spad >> 8;
         sycl::float4 sf(0.0f);
-        
+
         sycl::int4* const   vi  = &vi0[0];
         int32_t* const      vi4 = reinterpret_cast<int32_t*>(&vi0[0]);
         sycl::float4* const vf  = &vf0[0];
@@ -351,25 +352,25 @@ void cn_gpu(
 
         for (unsigned i = 0; i < CN_GPU_ITER; ++ i) {
           //nd.barrier(sycl::access::fence_space::local_space);
-         
+
           const int32_t xi = lpad_ptr(s, ld, lpad)[lm];
           vi4[l] = xi;
           nd.barrier(sycl::access::fence_space::local_space);
-          
+
           single_comupte_wrap(
             vi[L[l][0]], vi[L[l][1]], vi[L[l][2]], vi[L[l][3]], lm, ccnt[l], sf, vf + l, vi + l
           );
           nd.barrier(sycl::access::fence_space::local_space);
-          
+
           { int32_t xo = vi4[b];
             for (unsigned dd = b + 4; dd < (ld + 1) * 16; dd += 4) xo ^= vi4[dd];
-            lpad_ptr(s, ld, lpad)[lm] = xo ^ xi; 
+            lpad_ptr(s, ld, lpad)[lm] = xo ^ xi;
             vi4[l] = xo;
           }
           // float addition is not really associative and it is really important here
           vf4[l] = (vf4[b] + vf4[b + 4]) + (vf4[b + 8] + vf4[b + 12]);
           nd.barrier(sycl::access::fence_space::local_space);
-         
+
           { const float xf = fabsf((vf4[b] + vf4[b + 4]) + (vf4[b + 8] + vf4[b + 12]));
             vi4[l] ^= vi4[l + 4] ^ vi4[l + 8] ^ vi4[l + 12] ^
                       static_cast<int32_t>(xf * 16777216.0f);
@@ -401,7 +402,7 @@ void cn_gpu(
         for (unsigned i = l0 * nd.get_local_range(0) + l1; i < 256;
              i += nd.get_local_range(0) * nd.get_local_range(1)
         ) {
-          const uint32_t aes = AES[i];  
+          const uint32_t aes = AES[i];
           aes0[i] = aes;
           aes1[i] = sycl::rotate(aes, 8U);
           aes2[i] = sycl::rotate(aes, 16U);

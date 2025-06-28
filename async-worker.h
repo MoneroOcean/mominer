@@ -1,4 +1,4 @@
-// Copyright GNU GPLv3 (c) 2023-2023 MoneroOcean <support@moneroocean.stream>
+// Copyright GNU GPLv3 (c) 2023-2025 MoneroOcean <support@moneroocean.stream>
 
 #pragma once
 
@@ -92,12 +92,12 @@ class AsyncWorker: public Nan::AsyncProgressQueueWorker<char> {
     };
     m_error_callback->Call(1, argv, async_resource);
   }
-      
+
   void HandleOKCallback() {
     drainQueue();
     callback->Call(0, nullptr, async_resource);
   }
-      
+
   void HandleProgressCallback(const char*, size_t) {
     drainQueue();
   }
@@ -110,7 +110,7 @@ class AsyncWorker: public Nan::AsyncProgressQueueWorker<char> {
     m_toNode.write(msg);
     progress.Send(reinterpret_cast<const char*>(&m_toNode), sizeof(m_toNode));
   }
-  
+
   public:
 
   MessageQueue<Message> fromNode;
@@ -120,7 +120,7 @@ class AsyncWorker: public Nan::AsyncProgressQueueWorker<char> {
     Nan::Callback* const error_callback
   ) : Nan::AsyncProgressQueueWorker<char>(callback, "moner-core::AsyncWorker"),
       m_progress(progress), m_error_callback(error_callback) {}
-      
+
   ~AsyncWorker() {
     delete m_progress;
     delete m_error_callback;
@@ -145,7 +145,7 @@ class AsyncWorkerWrapper: public Nan::ObjectWrap {
       AsyncWorkerWrapper* const obj = new AsyncWorkerWrapper(
         create_worker(data_callback, complete_callback, error_callback, options)
       );
-      
+
       obj->Wrap(info.This());
       info.GetReturnValue().Set(info.This());
 
@@ -190,7 +190,7 @@ class AsyncWorkerWrapper: public Nan::ObjectWrap {
     tpl->InstanceTemplate()->SetInternalFieldCount(2);
 
     SetPrototypeMethod(tpl, "sendToCpp", sendToCpp);
-    
+
     constructor().Reset(Nan::GetFunction(tpl).ToLocalChecked());
     Nan::Set(target, Nan::New("AsyncWorker").ToLocalChecked(),
     Nan::GetFunction(tpl).ToLocalChecked());

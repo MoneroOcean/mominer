@@ -1,10 +1,10 @@
-// Copyright GNU GPLv3 (c) 2023-2023 MoneroOcean <support@moneroocean.stream>
+// Copyright GNU GPLv3 (c) 2023-2025 MoneroOcean <support@moneroocean.stream>
 
 #include "moner-core.h"
 
 #include "3rdparty/fmt/core.h"
 #include "backend/cpu/Cpu.h"
-#include "crypto/cn/CnCtx.h" 
+#include "crypto/cn/CnCtx.h"
 #include "crypto/randomx/blake2/blake2.h"
 #include "crypto/randomx/blake2/avx2/blake2b.h"
 #include "crypto/rx/RxFix.h"

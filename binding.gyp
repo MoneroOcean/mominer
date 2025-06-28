@@ -95,7 +95,7 @@
       "<!(node -e \"require('nan')\")"
     ],
     "cflags!": [ "-O3" ],
-    "cflags_cc!": [ "-std=gnu++1y", "-fno-exceptions" ],
+    "cflags_cc!": [ "-std=gnu++1y", "-std=gnu++17", "-fno-exceptions" ],
     "cflags+": [
       '<!@(./test-cpu.sh arm64 &&'
       '     echo "-march=armv8-a+crypto -flax-vector-conversions" || ('
@@ -115,7 +115,7 @@
       "-DNDEBUG -DHAVE_ROTR -DXMRIG_FEATURE_ASM "
       "-DXMRIG_ALGO_CN_LITE -DXMRIG_ALGO_CN_HEAVY -DXMRIG_ALGO_CN_PICO -DXMRIG_ALGO_CN_FEMTO "
       "-DXMRIG_ALGO_ARGON2 -DXMRIG_ALGO_GHOSTRIDER "
-      "-Ofast -flto=thin -funroll-loops -fmerge-all-constants"
+      "-O3 -ffast-math -flto=thin -funroll-loops -fmerge-all-constants"
     ],
     "cflags_cc+": [
       "-std=c++20"
@@ -132,7 +132,7 @@
       "cn-gpu.cpp",
     ],
     "cflags!": [ "-O3" ],
-    "cflags_cc!": [ "-fno-rtti", "-fno-exceptions", "-std=gnu++1y" ],
+    "cflags_cc!": [ "-fno-rtti", "-fno-exceptions", "-std=gnu++1y", "-std=gnu++17" ],
     "cflags+": [
       '<!@(./test-cpu.sh arm64 &&'
       '     echo "-march=armv8-a+crypto -flax-vector-conversions" || ('

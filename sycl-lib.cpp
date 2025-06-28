@@ -1,4 +1,4 @@
-// Copyright GNU GPLv3 (c) 2023-2023 MoneroOcean <support@moneroocean.stream>
+// Copyright GNU GPLv3 (c) 2023-2025 MoneroOcean <support@moneroocean.stream>
 
 #include "sycl-lib-internal.h"
 #include <list>
