@@ -132,7 +132,7 @@ module.exports.get_dev_batch = function(dev) {
 };
 
 module.exports.messageWorkers = function(msg) {
-  for (const worker_id of worker_ids) cluster.workers[worker_id].send(msg);
+  for (const worker_id of worker_ids) if (cluster.workers[worker_id]) cluster.workers[worker_id].send(msg);
 };
 
 // map 0..N-1 thread IDs into worker.id (that might be not sequential)

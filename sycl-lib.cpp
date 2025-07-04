@@ -5,7 +5,7 @@
 
 static std::map<std::string, sycl::device> str2dev;
 
-static void update_str2dev() {
+static void update_str2dev(const bool verbose = false) {
   unsigned cpu_num = 0, gpu_num = 0;
   for (auto platform : sycl::platform::get_platforms()) {
     const std::string& platform_name = platform.get_info<sycl::info::platform::name>();
@@ -13,12 +13,21 @@ static void update_str2dev() {
       if (device.is_cpu()) {
         str2dev[std::string("cpu") + std::to_string(++cpu_num)] = device;
       } else if (device.is_gpu()) {
-        // OpenCL GPU platforms will be available but not used by default
-        str2dev[std::string("gpu") + std::to_string(++gpu_num) +
-                (platform_name.find("OpenCL") != std::string::npos ? "o" : "")] = device;
+        // OpenCL GPU platforms will be available but not used by default if something else is present
+	const std::string gpuN = std::string("gpu") + std::to_string(++gpu_num);
+	if (platform_name.find("OpenCL") != std::string::npos) {
+	  str2dev[gpuN + "o"] = device;
+	  if (!str2dev.contains(gpuN)) str2dev[gpuN] = device;
+        } else if (platform_name.find("Level-Zero") != std::string::npos) {
+          str2dev[gpuN + "z"] = device;
+	  str2dev[gpuN] = device;
+	} else if (verbose) std::cout << "Found unsupported " << platform_name << " GPU platform device" << std::endl;
       }
     }
     gpu_num = 0; // reset gpu counter for every platform
+  }
+  if (verbose) for (const auto& pair : str2dev) {
+    std::cout << pair.first << ": " << pair.second.get_platform().get_info<sycl::info::platform::name>() << std::endl;
   }
 }
 
@@ -36,7 +45,7 @@ std::map<std::string, std::string> algo_params(
   const std::set<std::string>& cpu_algos,
   const std::set<std::string>& gpu_algos
 ) {
-  if (str2dev.empty()) update_str2dev();
+  if (str2dev.empty()) update_str2dev(true);
   std::map<std::string, std::string> result;
   std::set<std::string> algos = cpu_algos;
   algos.insert(gpu_algos.begin(), gpu_algos.end());
@@ -97,8 +106,8 @@ std::map<std::string, std::string> algo_params(
     if (gpu_algos.contains(algo)) {
       for (const auto& dev_pair : str2dev) {
         const std::string dev_str = dev_pair.first;
-        // CPU and OpenCL GPU platforms are not used by default
-        if (dev_str.starts_with("cpu") || dev_str.ends_with("o"))
+        // CPU and explicit GPU platforms are not used by default
+        if (dev_str.starts_with("cpu") || dev_str.ends_with("o") || dev_str.ends_with("z"))
           continue;
         const sycl::device& dev = dev_pair.second;
         const unsigned max_compute_units = dev.get_info<sycl::info::device::max_compute_units>();
@@ -106,11 +115,9 @@ std::map<std::string, std::string> algo_params(
           const unsigned batch_mem        = algo2mem.at(algo),
                          max_alloc_batch  = (dev.get_info<sycl::info::device::max_mem_alloc_size>()
                                             / batch_mem) & 0xFFFFFFF8,
-// L0 driver bug
-//                       max_batch        = dev.get_info<sycl::info::device::global_mem_size>()
-//                                          / batch_mem,
-                         max_batch        = 16225243136 / batch_mem,
-                         max_thread_batch = std::min(max_alloc_batch, max_batch),
+                         max_batch        = dev.get_info<sycl::info::device::global_mem_size>()
+                                            / batch_mem,
+                         max_thread_batch = 120, //std::min(max_alloc_batch, max_batch),
                          best_batch       = std::min(max_compute_units * 6, max_batch);
           unsigned used_batch = 0;
           while (used_batch < best_batch) {

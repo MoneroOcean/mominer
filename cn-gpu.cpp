@@ -18,7 +18,7 @@ const unsigned CN_MEMORY4  = CN_MEMORY / sizeof(uint32_t);
 const unsigned CN_MEMORY8  = CN_MEMORY / sizeof(uint64_t);
 const unsigned CN_MEMORY16 = CN_MEMORY / sizeof(sycl::uint4);
 
-const uint32_t AES[256] = {
+const std::vector<uint32_t> AES = {
   0xA56363C6, 0x847C7CF8, 0x997777EE, 0x8D7B7BF6, 0x0DF2F2FF, 0xBD6B6BD6, 0xB16F6FDE, 0x54C5C591,
   0x50303060, 0x03010102, 0xA96767CE, 0x7D2B2B56, 0x19FEFEE7, 0x62D7D7B5, 0xE6ABAB4D, 0x9A7676EC,
   0x45CACA8F, 0x9D82821F, 0x40C9C989, 0x877D7DFA, 0x15FAFAEF, 0xEB5959B2, 0xC947478E, 0x0BF0F0FB,
@@ -286,7 +286,7 @@ void cn_gpu(
     auto bLpads   = sycl::buffer(static_cast<uint64_t*>(Lpads), sycl::range(CN_MEMORY8 * batch));
     auto bLpads4  = bLpads.reinterpret<int32_t>(sycl::range(CN_MEMORY4 * batch));
     auto bLpads16 = bLpads.reinterpret<sycl::uint4>(sycl::range(CN_MEMORY16 * batch));
-    auto bAES     = sycl::buffer(AES, sycl::range(256));
+    auto bAES     = sycl::buffer(AES.data(), sycl::range(256));
 
     q.submit([&](sycl::handler& h) { // cn0_cn_gpu
       const auto inputs = bInputs.get_access<sycl::access::mode::read>(h);
