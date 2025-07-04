@@ -117,7 +117,7 @@ std::map<std::string, std::string> algo_params(
                                             / batch_mem) & 0xFFFFFFF8,
                          max_batch        = dev.get_info<sycl::info::device::global_mem_size>()
                                             / batch_mem,
-                         max_thread_batch = 120, //std::min(max_alloc_batch, max_batch),
+                         max_thread_batch = std::min(max_alloc_batch, max_batch),
                          best_batch       = std::min(max_compute_units * 6, max_batch);
           unsigned used_batch = 0;
           while (used_batch < best_batch) {
