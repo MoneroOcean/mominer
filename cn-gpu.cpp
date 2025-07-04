@@ -18,7 +18,7 @@ const unsigned CN_MEMORY4  = CN_MEMORY / sizeof(uint32_t);
 const unsigned CN_MEMORY8  = CN_MEMORY / sizeof(uint64_t);
 const unsigned CN_MEMORY16 = CN_MEMORY / sizeof(sycl::uint4);
 
-const std::vector<uint32_t> AES = {
+const std::vector<uint32_t> vAES = {
   0xA56363C6, 0x847C7CF8, 0x997777EE, 0x8D7B7BF6, 0x0DF2F2FF, 0xBD6B6BD6, 0xB16F6FDE, 0x54C5C591,
   0x50303060, 0x03010102, 0xA96767CE, 0x7D2B2B56, 0x19FEFEE7, 0x62D7D7B5, 0xE6ABAB4D, 0x9A7676EC,
   0x45CACA8F, 0x9D82821F, 0x40C9C989, 0x877D7DFA, 0x15FAFAEF, 0xEB5959B2, 0xC947478E, 0x0BF0F0FB,
@@ -257,8 +257,9 @@ inline void aes_round(
 
 void cn_gpu(
   const uint8_t* const inputs, const unsigned input_size, uint8_t* const output,
-  void* const Lpads, void* const Spads, const unsigned batch, const std::string& dev_str
+  void*, void*, const unsigned batch, const std::string& dev_str
 ) {
+  uint64_t spads_res[25 * batch];
   try {
     const auto exception_handler = [] (sycl::exception_list exceptions) {
       for (std::exception_ptr const& e : exceptions) {
@@ -280,17 +281,19 @@ void cn_gpu(
     }
     static auto kb = sycl::get_kernel_bundle<sycl::bundle_state::executable>(q.get_context());
 
-    auto bInputs  = sycl::buffer(inputs, sycl::range(input_size * batch));
-    auto bSpads   = sycl::buffer(static_cast<uint64_t*>(Spads), sycl::range(25 * batch));
-    auto bSpads4  = bSpads.reinterpret<uint32_t>(sycl::range(2 * 25 * batch));
-    auto bLpads   = sycl::buffer(static_cast<uint64_t*>(Lpads), sycl::range(CN_MEMORY8 * batch));
-    auto bLpads4  = bLpads.reinterpret<int32_t>(sycl::range(CN_MEMORY4 * batch));
-    auto bLpads16 = bLpads.reinterpret<sycl::uint4>(sycl::range(CN_MEMORY16 * batch));
-    auto bAES     = sycl::buffer(AES.data(), sycl::range(256));
+    auto bInputs = sycl::buffer(inputs, sycl::range(input_size * batch));
+    auto spads   = sycl::malloc_device<uint64_t>(25 * batch, q);
+    auto spads4  = reinterpret_cast<uint32_t*>(spads);
+    auto lpads   = sycl::malloc_device<uint64_t>(CN_MEMORY8 * batch, q);
+    auto lpads4  = reinterpret_cast<int32_t*>(lpads);
+    auto lpads16 = reinterpret_cast<sycl::uint4*>(lpads);
+    auto AES     = sycl::malloc_device<uint32_t>(vAES.size(), q);
+
+    // OK not to wait() here since it will be only used in cn2 kernel later
+    q.memcpy(AES, vAES.data(), vAES.size() * sizeof(uint32_t));
 
     q.submit([&](sycl::handler& h) { // cn0_cn_gpu
       const auto inputs = bInputs.get_access<sycl::access::mode::read>(h);
-      const auto spads  = bSpads.get_access<sycl::access::mode::write>(h);
       //sycl::stream os(1024, 128, h);
       h.use_kernel_bundle(kb);
       h.parallel_for(sycl::range(batch), [=](sycl::id<1> t) {
@@ -305,8 +308,6 @@ void cn_gpu(
     });
 
     q.submit([&](sycl::handler& h) { // cn00_cn_gpu
-      const auto spads = bSpads.get_access<sycl::access::mode::read>(h);
-      const auto lpads = bLpads.get_access<sycl::access::mode::write>(h);
       const unsigned THREADS2 = CN_MEMORY8 / 64;
       h.use_kernel_bundle(kb);
       h.parallel_for(sycl::range(batch * THREADS2), [=](sycl::id<1> t) {
@@ -319,10 +320,8 @@ void cn_gpu(
     });
 
     q.submit([&](sycl::handler& h) { // cn1_cn_gpu
-      const auto spads = bSpads4.get_access<sycl::access::mode::read>(h);
-      const auto lpads = bLpads4.get_access<sycl::access::mode::read_write>(h);
-      const auto vi0   = sycl::local_accessor<sycl::int4,   1>(sycl::range(16), h);
-      const auto vf0   = sycl::local_accessor<sycl::float4, 1>(sycl::range(16), h);
+      const auto vi0 = sycl::local_accessor<sycl::int4,   1>(sycl::range(16), h);
+      const auto vf0 = sycl::local_accessor<sycl::float4, 1>(sycl::range(16), h);
       h.use_kernel_bundle(kb);
       h.parallel_for(sycl::nd_range(sycl::range(batch * 16), sycl::range(16)),
                      [=](sycl::nd_item<1> nd
@@ -340,8 +339,8 @@ void cn_gpu(
           1.4140625f, 1.2734375f, 1.2578125f, 1.2890625f,
           1.3203125f, 1.3515625f, 1.3359375f, 1.4609375f
         };
-        const uint32_t* const spad = &spads[nd.get_group().get_group_id() * (25 * 2)];
-        int32_t* const lpad = &lpads[nd.get_group().get_group_id() * CN_MEMORY4];
+        const uint32_t* const spad = &spads4[nd.get_group().get_group_id() * (25 * 2)];
+        int32_t* const lpad = &lpads4[nd.get_group().get_group_id() * CN_MEMORY4];
         uint32_t s = *spad >> 8;
         sycl::float4 sf(0.0f);
 
@@ -385,15 +384,12 @@ void cn_gpu(
 
     q.submit([&](sycl::handler& h) { // cn2
       const unsigned THREADS2 = 8;
-      const auto spads = bSpads4 .get_access<sycl::access::mode::read_write>(h);
-      const auto lpads = bLpads16.get_access<sycl::access::mode::read>(h);
-      const auto AES   = bAES    .get_access<sycl::access::mode::read>(h);
-      const auto aes0  = sycl::local_accessor<uint32_t, 1>(sycl::range(256), h);
-      const auto aes1  = sycl::local_accessor<uint32_t, 1>(sycl::range(256), h);
-      const auto aes2  = sycl::local_accessor<uint32_t, 1>(sycl::range(256), h);
-      const auto aes3  = sycl::local_accessor<uint32_t, 1>(sycl::range(256), h);
-      const auto x1    = sycl::local_accessor<sycl::uint4, 2>(sycl::range(THREADS2, 8), h);
-      const auto x2    = sycl::local_accessor<sycl::uint4, 2>(sycl::range(THREADS2, 8), h);
+      const auto aes0 = sycl::local_accessor<uint32_t, 1>(sycl::range(256), h);
+      const auto aes1 = sycl::local_accessor<uint32_t, 1>(sycl::range(256), h);
+      const auto aes2 = sycl::local_accessor<uint32_t, 1>(sycl::range(256), h);
+      const auto aes3 = sycl::local_accessor<uint32_t, 1>(sycl::range(256), h);
+      const auto x1   = sycl::local_accessor<sycl::uint4, 2>(sycl::range(THREADS2, 8), h);
+      const auto x2   = sycl::local_accessor<sycl::uint4, 2>(sycl::range(THREADS2, 8), h);
       h.use_kernel_bundle(kb);
       h.parallel_for(sycl::nd_range(sycl::range(batch, 8), sycl::range(THREADS2, 8)),
                      [=](sycl::nd_item<2> nd
@@ -411,8 +407,8 @@ void cn_gpu(
         const uint32_t* const aes[4] = { &aes0[0], &aes1[0], &aes2[0], &aes3[0] };
         nd.barrier(sycl::access::fence_space::local_space);
 
-        const auto spad = spads.get_pointer() + (nd.get_global_id(0) * (25 * 2));
-        const sycl::uint4* const lpad = &lpads[nd.get_global_id(0) * CN_MEMORY16];
+        const auto spad = spads4 + (nd.get_global_id(0) * (25 * 2));
+        const sycl::uint4* const lpad = &lpads16[nd.get_global_id(0) * CN_MEMORY16];
         sycl::uint4 x;
         x.load(l1 + 4, spad);
         union { uint32_t key[40]; sycl::uint4 key4[10]; sycl::uint8 key8[5]; };
@@ -453,6 +449,10 @@ void cn_gpu(
     });
 
     q.wait_and_throw();
+    q.memcpy(spads_res, spads, 25 * batch * sizeof(uint64_t)).wait();
+    sycl::free(AES, q);
+    sycl::free(lpads, q);
+    sycl::free(spads, q);
 
   } catch (sycl::exception const& e) {
     printf("Caught synchronous SYCL exception:\n%s\n", e.what());
@@ -460,7 +460,7 @@ void cn_gpu(
   }
 
   for (unsigned i = 0; i != batch; ++ i) {
-    keccak(static_cast<uint64_t*>(Spads) + 25*i);
-    memcpy(output + HASH_LEN*i, static_cast<uint64_t*>(Spads) + 25*i, HASH_LEN);
+    keccak(spads_res + 25*i);
+    memcpy(output + HASH_LEN*i, spads_res + 25*i, HASH_LEN);
   }
 }

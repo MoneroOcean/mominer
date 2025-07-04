@@ -154,3 +154,9 @@ Options:
 2023-02-24 05:58:24 ERROR: No directive specified
 ```
 
+You can run test and benchmark separately for algo you need like this:
+
+```
+./r.sh node moner.js test cn/gpu e55cb23e51649a59b127b96b515f2bf7bfea199741a0216cf838ded06eff82df --job '{"algo":"cn/gpu","dev":"gpu1*8"}'
+./r.sh node moner.js bench cn/gpu --job '{"algo":"cn/gpu","dev":"gpu1z*960"}'
+```
