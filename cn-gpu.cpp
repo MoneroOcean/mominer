@@ -9,6 +9,7 @@
 #include "sycl-lib-internal.h"
 #include "consts.h"
 
+
 const unsigned HASH_DATA_AREA = 136;
 const unsigned CN_MEMORY      = 2 * 1024 * 1024;
 const unsigned CN_GPU_ITER    = 0xC000;
@@ -18,7 +19,7 @@ const unsigned CN_MEMORY4  = CN_MEMORY / sizeof(uint32_t);
 const unsigned CN_MEMORY8  = CN_MEMORY / sizeof(uint64_t);
 const unsigned CN_MEMORY16 = CN_MEMORY / sizeof(sycl::uint4);
 
-const std::vector<uint32_t> vAES = {
+constexpr uint32_t AES[256] = {
   0xA56363C6, 0x847C7CF8, 0x997777EE, 0x8D7B7BF6, 0x0DF2F2FF, 0xBD6B6BD6, 0xB16F6FDE, 0x54C5C591,
   0x50303060, 0x03010102, 0xA96767CE, 0x7D2B2B56, 0x19FEFEE7, 0x62D7D7B5, 0xE6ABAB4D, 0x9A7676EC,
   0x45CACA8F, 0x9D82821F, 0x40C9C989, 0x877D7DFA, 0x15FAFAEF, 0xEB5959B2, 0xC947478E, 0x0BF0F0FB,
@@ -245,14 +246,18 @@ void aes_expend_key(uint32_t* const keybuf) {
 }
 
 inline void aes_round(
-  sycl::uint4* const px, const sycl::uint4 key, const uint32_t* const * const aes
+  sycl::uint4* const px, const sycl::uint4 key,
+  const sycl::local_accessor<uint32_t, 1>& aes0,
+  const sycl::local_accessor<uint32_t, 1>& aes1,
+  const sycl::local_accessor<uint32_t, 1>& aes2,
+  const sycl::local_accessor<uint32_t, 1>& aes3
 ) {
   union { uint8_t b[4]; uint32_t u; } u0, u1, u2, u3;
   u0.u = px->x(); u1.u = px->y(); u2.u = px->z(); u3.u = px->w();
-  px->x() = key[0] ^ aes[0][u0.b[0]] ^ aes[1][u1.b[1]] ^ aes[2][u2.b[2]] ^ aes[3][u3.b[3]];
-  px->y() = key[1] ^ aes[0][u1.b[0]] ^ aes[1][u2.b[1]] ^ aes[2][u3.b[2]] ^ aes[3][u0.b[3]];
-  px->z() = key[2] ^ aes[0][u2.b[0]] ^ aes[1][u3.b[1]] ^ aes[2][u0.b[2]] ^ aes[3][u1.b[3]];
-  px->w() = key[3] ^ aes[0][u3.b[0]] ^ aes[1][u0.b[1]] ^ aes[2][u1.b[2]] ^ aes[3][u2.b[3]];
+  px->x() = key[0] ^ aes0[u0.b[0]] ^ aes1[u1.b[1]] ^ aes2[u2.b[2]] ^ aes3[u3.b[3]];
+  px->y() = key[1] ^ aes0[u1.b[0]] ^ aes1[u2.b[1]] ^ aes2[u3.b[2]] ^ aes3[u0.b[3]];
+  px->z() = key[2] ^ aes0[u2.b[0]] ^ aes1[u3.b[1]] ^ aes2[u0.b[2]] ^ aes3[u1.b[3]];
+  px->w() = key[3] ^ aes0[u3.b[0]] ^ aes1[u0.b[1]] ^ aes2[u1.b[2]] ^ aes3[u2.b[3]];
 }
 
 void cn_gpu(
@@ -287,10 +292,6 @@ void cn_gpu(
     auto lpads   = sycl::malloc_device<uint64_t>(CN_MEMORY8 * batch, q);
     auto lpads4  = reinterpret_cast<int32_t*>(lpads);
     auto lpads16 = reinterpret_cast<sycl::uint4*>(lpads);
-    auto AES     = sycl::malloc_device<uint32_t>(vAES.size(), q);
-
-    // OK not to wait() here since it will be only used in cn2 kernel later
-    q.memcpy(AES, vAES.data(), vAES.size() * sizeof(uint32_t));
 
     q.submit([&](sycl::handler& h) { // cn0_cn_gpu
       const auto inputs = bInputs.get_access<sycl::access::mode::read>(h);
@@ -404,7 +405,6 @@ void cn_gpu(
           aes2[i] = sycl::rotate(aes, 16U);
           aes3[i] = sycl::rotate(aes, 24U);
         }
-        const uint32_t* const aes[4] = { &aes0[0], &aes1[0], &aes2[0], &aes3[0] };
         nd.barrier(sycl::access::fence_space::local_space);
 
         const auto spad = spads4 + (nd.get_global_id(0) * (25 * 2));
@@ -423,20 +423,20 @@ void cn_gpu(
         for (unsigned i = 0, i1 = l1; i < CN_MEMORY16/8; ++i, i1 = (i1 + 16) % CN_MEMORY16) {
           x ^= lpad[i1];
           x ^= x2l;
-          for (unsigned j = 0; j < 10; ++ j) aes_round(&x, key4[j], aes);
+          for (unsigned j = 0; j < 10; ++ j) aes_round(&x, key4[j], aes0, aes1, aes2, aes3);
           x1s = x;
           nd.barrier(sycl::access::fence_space::local_space);
 
           x ^= lpad[i1 + 8];
           x ^= x1l;
-          for (unsigned j = 0; j < 10; ++ j) aes_round(&x, key4[j], aes);
+          for (unsigned j = 0; j < 10; ++ j) aes_round(&x, key4[j], aes0, aes1, aes2, aes3);
           x2s = x;
           nd.barrier(sycl::access::fence_space::local_space);
         }
 
         x ^= x2l;
         for (unsigned i = 0; i < 16; ++ i) {
-          for (unsigned j = 0; j < 10; ++ j) aes_round(&x, key4[j], aes);
+          for (unsigned j = 0; j < 10; ++ j) aes_round(&x, key4[j], aes0, aes1, aes2, aes3);
           x1s = x;
           nd.barrier(sycl::access::fence_space::local_space);
 
@@ -450,7 +450,6 @@ void cn_gpu(
 
     q.wait_and_throw();
     q.memcpy(spads_res, spads, 25 * batch * sizeof(uint64_t)).wait();
-    sycl::free(AES, q);
     sycl::free(lpads, q);
     sycl::free(spads, q);
 
