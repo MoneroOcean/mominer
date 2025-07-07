@@ -265,7 +265,7 @@ bool Core::process_message(const std::string& type, const MessageValues& v) {
        { const auto pi = v.find("algo");
          if (pi != v.end()) {
            const auto& algo = pi->second;
-           is_set_msr = algo.starts_with("rx/") || algo == "ghostrider" || algo == "cn-hexy/xhv";
+           is_set_msr = algo.starts_with("rx/") || algo == "ghostrider" || algo == "cn-heavy/xhv";
          }
        }
 

@@ -17,7 +17,7 @@ if (h.cluster_process()) return;
 global.opt = {};
 
 let compute_core = null;
-let algo_params_bench_cb = null;  // used to record algo_params bench data
+let algo_params_bench_cb = null; // used to record algo_params bench data
 let last_job = null;
 let directive = null;
 let test = {
