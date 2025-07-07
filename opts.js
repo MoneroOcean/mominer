@@ -35,7 +35,7 @@ module.exports.opt_help = {
                 'hexadecimal string of input blob' ],
     seed_hex: [ "3132333435363738393031323334353637383930313233343536373839303132",
                 'hexadecimal string of seed hash blob (used for rx algos)' ],
-    height:   [ 0, "Block height used by somo algos"],
+    height:   [ 0, "Block height used by some algos"],
   },
   pool_time: {
     _help:             'JSON string of pool related timings (in seconds)',

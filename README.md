@@ -121,7 +121,7 @@ Options:
   --job.dev:                        device config line "[<dev>[*B][^P],]+", dev = {cpu, gpu<N>, cpu<N>}, N = device number, B = hash batch size, P = number of parallel processes ("cpu" by default)
   --job.blob_hex:                   hexadecimal string of input blob ("0305A0DBD6BF05CF16E503F3A66F78007CBF34144332ECBFC22ED95C8700383B309ACE1923A0964B00000008BA939A62724C0D7581FCE5761E9D8A0E6A1C3F924FDD8493D1115649C05EB601" by default)
   --job.seed_hex:                   hexadecimal string of seed hash blob (used for rx algos) ("3132333435363738393031323334353637383930313233343536373839303132" by default)
-  --job.height:                     Block height used by somo algos (0 by default)
+  --job.height:                     Block height used by some algos (0 by default)
 
 --pool_time '{...}':                JSON string of pool related timings (in seconds)
   --pool_time.stats:                time to show pool mining stats (600 by default)
