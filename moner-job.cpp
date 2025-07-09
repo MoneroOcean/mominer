@@ -49,7 +49,7 @@ static const std::map<std::string, xmrig::Algorithm::Id> cpu_name2algo = {
   { "rx/arq",          xmrig::Algorithm::RX_ARQ         },
   { "rx/graft",        xmrig::Algorithm::RX_GRAFT       },
   { "rx/sfx",          xmrig::Algorithm::RX_SFX         },
-//  { "rx/yada",         xmrig::Algorithm::RX_YADA        },
+  { "rx/yada",         xmrig::Algorithm::RX_YADA        },
 };
 
 static const std::map<std::string, RandomX_ConfigurationBase*> rx_cpu_name2config = {
@@ -58,7 +58,7 @@ static const std::map<std::string, RandomX_ConfigurationBase*> rx_cpu_name2confi
   { "rx/arq",          &RandomX_ArqmaConfig   },
   { "rx/graft",        &RandomX_GraftConfig   },
   { "rx/sfx",          &RandomX_SafexConfig   },
-//  { "rx/yada",         &RandomX_YadaConfig    },
+  { "rx/yada",         &RandomX_YadaConfig    },
 };
 
 static const xmrig::CnHash::AlgoVariant cpu_params2variant[MAX_CN_CPU_WAYS][2] = {
@@ -261,6 +261,17 @@ void Core::set_job(
           for (auto& thread : threads) thread.join();
         } else init_rx_dataset_thread(m_rx_dataset, m_rx_cache, 0, rx_dataset_item_count);
       }
+
+      // recreate vms
+      if (m_vm == nullptr) {
+        m_vm = new randomx_vm*[new_batch];
+        for (int i = 0; i != new_batch; ++ i) {
+          m_vm[i] = randomx_create_vm(
+            get_rx_vm_flags(m_is_rx_jit, m_rx_dataset, m_rx_dataset_mem), m_rx_cache, m_rx_dataset,
+            m_lpads->scratchpad() + i * new_mem_size, 0
+          );
+        }
+      }
     } else { // setup cn stuff
       if (m_input == nullptr) m_input = static_cast<uint8_t*>(alloc_mem(new_batch * MAX_BLOB_LEN));
       if (m_output == nullptr) m_output = static_cast<uint8_t*>(alloc_mem(new_batch * HASH_LEN));
@@ -294,22 +305,17 @@ void Core::set_job(
     const unsigned job_ref = m_job_ref;
     for (unsigned batch_id = 0; batch_id != m_batch; ++batch_id) m_thread_pool->push(
       [=, &m_job_ref = m_job_ref, &m_hash_count = m_hash_count](int thread_id) {
-        randomx_vm* vm = nullptr;
         try {
           alignas(16) uint8_t  input[MAX_BLOB_LEN];
           alignas(16) uint8_t  output[HASH_LEN];
           alignas(16) uint64_t temp_hash[8];
-          vm = randomx_create_vm(
-            get_rx_vm_flags(m_is_rx_jit, m_rx_dataset, m_rx_dataset_mem), m_rx_cache, m_rx_dataset,
-            m_lpads->scratchpad() + thread_id * new_mem_size, 0
-          );
           uint32_t nonce = new_nonce + new_thread_id * m_batch + batch_id;
           if (m_is_nicehash) nonce |= *get_nonce(new_input2) & 0xFF000000;
           const unsigned nonce_step = new_thread_num * m_batch;
           unsigned hashrate_update_counter = HASHRATE_COUNTER_INTERVAL;
           memcpy(input, new_input2, m_input_len);
           if (is_set_nonce) { *get_nonce(input) = nonce; nonce += nonce_step; }
-          randomx_calculate_hash_first(vm, temp_hash, input, m_input_len);
+          randomx_calculate_hash_first(m_vm[thread_id], temp_hash, input, m_input_len);
           while (job_ref == m_job_ref) { // continue until we get a new job
             uint32_t* const pnonce = get_nonce(input);
             const uint32_t prev_nonce = nonce;
@@ -320,7 +326,7 @@ void Core::set_job(
               send_error("Nonce overflow");
               break; // will also effectively stops this thread
             }
-            randomx_calculate_hash_next(vm, temp_hash, input, m_input_len, output);
+            randomx_calculate_hash_next(m_vm[thread_id], temp_hash, input, m_input_len, output);
             if (!is_set_nonce) { // test job
               char hash[HASH_LEN*2+1];
               send_msg("test", "result", hash_bin2hex(output, hash));
@@ -342,7 +348,6 @@ void Core::set_job(
         } catch(...) {
           send_error("Compute function thread exception");
         }
-        if (vm != nullptr) randomx_destroy_vm(vm);
       }
     );
   } else {

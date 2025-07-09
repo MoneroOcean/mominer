@@ -66,8 +66,8 @@ let tests = [
     "08135aaeb098d86f269d0a037aba423093e4c48e9e31f16c13d2ed3dc4489ba7"
   ], [ test, { algo: "rx/sfx", dev: "cpu*2", blob_hex: "5468697320697320612074657374" },
     "19e786570a6d959f023cb77b0be5bede76cc4a5c61c090b3d24c5ebd2c9ecb27"
-//  ], [ test, { algo: "rx/yada", dev: "cpu*2", blob_hex: "5468697320697320612074657374" },
-//    "745ac75a1d5d044ebd5cbc97269c1f75b1bfeb6ce2df4ed700be898356a879df"
+  ], [ test, { algo: "rx/yada", dev: "cpu*2", blob_hex: "5468697320697320612074657374" },
+    "c6cc14fe859f917013223aa7a1959a169162df14510d462b681c70895ea6f874"
   ], [ test, { algo: "ghostrider", dev: "cpu*8",
             blob_hex: "000000208c246d0b90c3b389c4086e8b672ee040" +
                       "d64db5b9648527133e217fbfa48da64c0f3c0a0b" +

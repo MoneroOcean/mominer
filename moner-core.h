@@ -44,6 +44,7 @@ class Core: public AsyncWorker {
   randomx_cache*   m_rx_cache;
   randomx_dataset* m_rx_dataset;
   ctpl::thread_pool* m_thread_pool;
+  randomx_vm** m_vm;
   std::mutex m_mutex_hashrate;
 
   inline uint32_t* get_nonce(uint8_t* const input, const unsigned batch = 0) {
@@ -98,7 +99,7 @@ class Core: public AsyncWorker {
       m_nonce_step(1), m_nonce_offset(39), m_nonce(0), m_target(0),
       m_timestamp(0), m_hash_count(0),
       m_is_rx_jit(true), m_is_nicehash(true), m_rx_cache(nullptr), m_rx_dataset(nullptr),
-      m_thread_pool(nullptr)
+      m_thread_pool(nullptr), m_vm(nullptr)
   {
     m_fn.any = nullptr;
   }

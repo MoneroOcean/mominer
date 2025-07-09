@@ -39,6 +39,11 @@ static const std::map<xmrig::ICpuInfo::MsrMod, MsrItems> msr_mods = {
     { 0xC0011021, MsrValue(0x0004000000000040ULL, ~0x20ULL) },
     { 0xC0011022, MsrValue(0x8680000401570000ULL) },
     { 0xC001102b, MsrValue(0x2040cc10ULL) }
+  }}, { xmrig::ICpuInfo::MSR_MOD_RYZEN_1AH_ZEN5, MsrItems {
+    { 0xC0011020, MsrValue(0x0004400000000000ULL) },
+    { 0xC0011021, MsrValue(0x0004000000000040ULL, ~0x20ULL) },
+    { 0xC0011022, MsrValue(0x8680000401570000ULL) },
+    { 0xC001102b, MsrValue(0x2040cc10ULL) }
   }}, { xmrig::ICpuInfo::MSR_MOD_INTEL, MsrItems {
     { 0x1a4, MsrValue(0xf) }
   }}
@@ -139,6 +144,10 @@ void Core::free_memory(
   if (is_batch_changed || is_free_rx) {
     // ++ m_job_ref is to stop rx threads if any
     if (m_thread_pool) { ++ m_job_ref; delete m_thread_pool; m_thread_pool = nullptr; }
+    if (m_vm) {
+      for (int i = 0; i != m_batch; ++ i) randomx_destroy_vm(m_vm[i]);
+      delete [] m_vm; m_vm = nullptr;
+    }
   }
   if (is_batch_changed || is_mem_size_changed) {
     if (m_lpads) { delete m_lpads; m_lpads = nullptr; }
