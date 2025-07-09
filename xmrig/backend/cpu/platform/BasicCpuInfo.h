@@ -1,7 +1,7 @@
 /* XMRig
  * Copyright (c) 2017-2019 XMR-Stak    <https://github.com/fireice-uk>, <https://github.com/psychocrypt>
- * Copyright (c) 2018-2021 SChernykh   <https://github.com/SChernykh>
- * Copyright (c) 2016-2021 XMRig       <support@xmrig.com>
+ * Copyright (c) 2018-2025 SChernykh   <https://github.com/SChernykh>
+ * Copyright (c) 2016-2025 XMRig       <support@xmrig.com>
  *
  *   This program is free software: you can redistribute it and/or modify
  *   it under the terms of the GNU General Public License as published by
@@ -70,11 +70,10 @@ protected:
 #   endif
     }
 
-protected:
     Arch m_arch             = ARCH_UNKNOWN;
     bool m_jccErratum       = false;
     char m_brand[64 + 6]{};
-    size_t m_threads;
+    size_t m_threads        = 0;
     std::vector<int32_t> m_units;
     Vendor m_vendor         = VENDOR_UNKNOWN;
 
@@ -84,6 +83,8 @@ private:
     uint32_t m_family       = 0;
     uint32_t m_model        = 0;
     uint32_t m_stepping     = 0;
+#   else
+    void init_arm();
 #   endif
 
     Assembly m_assembly     = Assembly::NONE;
@@ -92,7 +93,7 @@ private:
 };
 
 
-} /* namespace xmrig */
+} // namespace xmrig
 
 
-#endif /* XMRIG_BASICCPUINFO_H */
+#endif // XMRIG_BASICCPUINFO_H

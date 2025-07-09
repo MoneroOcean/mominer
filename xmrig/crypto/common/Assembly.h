@@ -20,8 +20,6 @@
 #define XMRIG_ASSEMBLY_H
 
 
-
-
 namespace xmrig {
 
 

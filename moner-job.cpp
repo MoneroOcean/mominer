@@ -4,7 +4,7 @@
 #include "sycl-lib.h"
 
 #include "backend/cpu/Cpu.h"
-#include "crypto/cn/CnCtx.h" 
+#include "crypto/cn/CnCtx.h"
 #include "crypto/cn/CryptoNight.h"
 #include "crypto/ghostrider/ghostrider.h"
 #include "crypto/randomx/configuration.h"
@@ -49,7 +49,7 @@ static const std::map<std::string, xmrig::Algorithm::Id> cpu_name2algo = {
   { "rx/arq",          xmrig::Algorithm::RX_ARQ         },
   { "rx/graft",        xmrig::Algorithm::RX_GRAFT       },
   { "rx/sfx",          xmrig::Algorithm::RX_SFX         },
-  { "rx/keva",         xmrig::Algorithm::RX_KEVA        },
+//  { "rx/yada",         xmrig::Algorithm::RX_YADA        },
 };
 
 static const std::map<std::string, RandomX_ConfigurationBase*> rx_cpu_name2config = {
@@ -58,7 +58,7 @@ static const std::map<std::string, RandomX_ConfigurationBase*> rx_cpu_name2confi
   { "rx/arq",          &RandomX_ArqmaConfig   },
   { "rx/graft",        &RandomX_GraftConfig   },
   { "rx/sfx",          &RandomX_SafexConfig   },
-  { "rx/keva",         &RandomX_KevaConfig    },
+//  { "rx/yada",         &RandomX_YadaConfig    },
 };
 
 static const xmrig::CnHash::AlgoVariant cpu_params2variant[MAX_CN_CPU_WAYS][2] = {

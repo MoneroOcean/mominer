@@ -47,8 +47,6 @@ xmrig::ICpuInfo *xmrig::Cpu::info()
 }
 
 
-
-
 void xmrig::Cpu::release()
 {
     delete cpuInfo;

@@ -126,6 +126,7 @@ FORCE_INLINE rx_vec_f128 rx_set1_vec_f128(uint64_t x) {
 
 #define rx_xor_vec_f128 _mm_xor_pd
 #define rx_and_vec_f128 _mm_and_pd
+#define rx_and_vec_i128 _mm_and_si128
 #define rx_or_vec_f128 _mm_or_pd
 
 #ifdef __AES__
@@ -199,7 +200,18 @@ typedef union{
 	int i32[4];
 } vec_u;
 
-#define rx_aligned_alloc(a, b) malloc(a)
+#ifdef HAVE_POSIX_MEMALIGN
+inline void* rx_aligned_alloc(size_t size, size_t align) {
+    void* p;
+    if (posix_memalign(&p, align, size) == 0)
+        return p;
+
+    return 0;
+};
+#else
+#   define rx_aligned_alloc(a, b) malloc(a)
+#endif
+
 #define rx_aligned_free(a) free(a)
 #define rx_prefetch_nta(x)
 #define rx_prefetch_t0(x)
@@ -276,6 +288,10 @@ FORCE_INLINE rx_vec_f128 rx_xor_vec_f128(rx_vec_f128 a, rx_vec_f128 b) {
 
 FORCE_INLINE rx_vec_f128 rx_and_vec_f128(rx_vec_f128 a, rx_vec_f128 b) {
 	return (rx_vec_f128)vec_and(a,b);
+}
+
+FORCE_INLINE rx_vec_i128 rx_and_vec_i128(rx_vec_i128 a, rx_vec_i128 b) {
+	return (rx_vec_i128)vec_and(a, b);
 }
 
 FORCE_INLINE rx_vec_f128 rx_or_vec_f128(rx_vec_f128 a, rx_vec_f128 b) {
@@ -387,15 +403,22 @@ FORCE_INLINE rx_vec_f128 rx_cvt_packed_int_vec_f128(const void* addr) {
 typedef uint8x16_t rx_vec_i128;
 typedef float64x2_t rx_vec_f128;
 
+#ifdef HAVE_POSIX_MEMALIGN
 inline void* rx_aligned_alloc(size_t size, size_t align) {
-	void* p;
-	if (posix_memalign(&p, align, size) == 0)
-		return p;
+    void* p;
+    if (posix_memalign(&p, align, size) == 0)
+        return p;
 
-	return 0;
+    return 0;
 };
-
-#define rx_aligned_free(a) free(a)
+#   define rx_aligned_free(a) free(a)
+#elif defined(HAVE_ALIGNED_MALLOC)
+#   define rx_aligned_alloc(a, b) _aligned_malloc(a, b)
+#   define rx_aligned_free(a) _aligned_free(a)
+#else
+#   define rx_aligned_alloc(a, b) malloc(a)
+#   define rx_aligned_free(a) free(a)
+#endif
 
 inline void rx_prefetch_nta(void* ptr) {
 	asm volatile ("prfm pldl1strm, [%0]\n" : : "r" (ptr));
@@ -443,6 +466,8 @@ FORCE_INLINE rx_vec_f128 rx_xor_vec_f128(rx_vec_f128 a, rx_vec_f128 b) {
 FORCE_INLINE rx_vec_f128 rx_and_vec_f128(rx_vec_f128 a, rx_vec_f128 b) {
 	return vreinterpretq_f64_u8(vandq_u8(vreinterpretq_u8_f64(a), vreinterpretq_u8_f64(b)));
 }
+
+#define rx_and_vec_i128 vandq_u8
 
 FORCE_INLINE rx_vec_f128 rx_or_vec_f128(rx_vec_f128 a, rx_vec_f128 b) {
 	return vreinterpretq_f64_u8(vorrq_u8(vreinterpretq_u8_f64(a), vreinterpretq_u8_f64(b)));
@@ -535,8 +560,23 @@ typedef union {
 	rx_vec_i128 i;
 } rx_vec_f128;
 
-#define rx_aligned_alloc(a, b) malloc(a)
-#define rx_aligned_free(a) free(a)
+#ifdef HAVE_POSIX_MEMALIGN
+inline void* rx_aligned_alloc(size_t size, size_t align) {
+    void* p;
+    if (posix_memalign(&p, align, size) == 0)
+        return p;
+
+    return 0;
+};
+#   define rx_aligned_free(a) free(a)
+#elif defined(HAVE_ALIGNED_MALLOC)
+#   define rx_aligned_alloc(a, b) _aligned_malloc(a, b)
+#   define rx_aligned_free(a) _aligned_free(a)
+#else
+#   define rx_aligned_alloc(a, b) malloc(a)
+#   define rx_aligned_free(a) free(a)
+#endif
+
 #define rx_prefetch_nta(x)
 #define rx_prefetch_t0(x)
 
@@ -632,6 +672,13 @@ FORCE_INLINE rx_vec_f128 rx_and_vec_f128(rx_vec_f128 a, rx_vec_f128 b) {
 	rx_vec_f128 x;
 	x.i.u64[0] = a.i.u64[0] & b.i.u64[0];
 	x.i.u64[1] = a.i.u64[1] & b.i.u64[1];
+	return x;
+}
+
+FORCE_INLINE rx_vec_i128 rx_and_vec_i128(rx_vec_i128 a, rx_vec_i128 b) {
+	rx_vec_i128 x;
+	x.u64[0] = a.u64[0] & b.u64[0];
+	x.u64[1] = a.u64[1] & b.u64[1];
 	return x;
 }
 

@@ -50,8 +50,6 @@ public:
         return (new_value & mask) | (old_value & ~mask);
     }
 
-    String toString() const;
-
 private:
     uint32_t m_reg      = 0;
     uint64_t m_value    = 0;

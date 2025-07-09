@@ -27,7 +27,6 @@
 
 
 #include "crypto/common/Assembly.h"
-#include "3rdparty/rapidjson/document.h"
 
 
 namespace xmrig {
@@ -64,37 +63,7 @@ xmrig::Assembly::Id xmrig::Assembly::parse(const char *assembly, Id defaultValue
 }
 
 
-xmrig::Assembly::Id xmrig::Assembly::parse(const rapidjson::Value &value, Id defaultValue)
-{
-    if (value.IsBool()) {
-        return value.GetBool() ? AUTO : NONE;
-    }
-
-    if (value.IsString()) {
-        return parse(value.GetString(), defaultValue);
-    }
-
-    return defaultValue;
-}
-
-
 const char *xmrig::Assembly::toString() const
 {
     return asmNames[m_id];
-}
-
-
-rapidjson::Value xmrig::Assembly::toJSON() const
-{
-    using namespace rapidjson;
-
-    if (m_id == NONE) {
-        return Value(false);
-    }
-
-    if (m_id == AUTO) {
-        return Value(true);
-    }
-
-    return Value(StringRef(toString()));
 }

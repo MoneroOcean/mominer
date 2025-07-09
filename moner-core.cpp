@@ -329,7 +329,7 @@ void Core::Execute(const AsyncProgressQueueWorker<char>::ExecutionProgress& prog
   randomx_set_scratchpad_prefetch_mode(0);
   randomx_set_huge_pages_jit(true);
   randomx_set_optimized_dataset_init(1);
-   m_progress = &progress;
+  m_progress = &progress;
 
   while (true) {
     std::deque<Message> messages;

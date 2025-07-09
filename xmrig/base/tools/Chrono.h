@@ -29,7 +29,7 @@ namespace xmrig {
 class Chrono
 {
 public:
-    static double highResolutionMSecs() { return 0; }
+    static double highResolutionMSecs();
 
 
     static inline uint64_t steadyMSecs()

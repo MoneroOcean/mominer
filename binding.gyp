@@ -66,7 +66,6 @@
       '<!@(./test-cpu.sh x86_64 && ('
       '     echo "xmrig/backend/cpu/platform/BasicCpuInfo.cpp"'
       '     echo "xmrig/hw/msr/Msr.cpp"'
-      '     echo "xmrig/hw/msr/MsrItem.cpp"'
       '     echo "xmrig/hw/msr/Msr_linux.cpp"'
       '     echo "xmrig/3rdparty/argon2/arch/x86_64/lib/argon2-arch.c"'
       '     echo "xmrig/3rdparty/argon2/arch/x86_64/lib/argon2-avx512f.c"'
