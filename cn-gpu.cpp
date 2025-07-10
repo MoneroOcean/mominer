@@ -5,7 +5,6 @@
 
 #include <sycl/sycl.hpp>
 #include <chrono>
-#include <math.h>
 #include "sycl-lib-internal.h"
 #include "consts.h"
 
@@ -371,7 +370,7 @@ void cn_gpu(
           vf4[l] = (vf4[b] + vf4[b + 4]) + (vf4[b + 8] + vf4[b + 12]);
           nd.barrier(sycl::access::fence_space::local_space);
 
-          { const float xf = fabsf((vf4[b] + vf4[b + 4]) + (vf4[b + 8] + vf4[b + 12]));
+          { const float xf = sycl::fabs((vf4[b] + vf4[b + 4]) + (vf4[b + 8] + vf4[b + 12]));
             vi4[l] ^= vi4[l + 4] ^ vi4[l + 8] ^ vi4[l + 12] ^
                       static_cast<int32_t>(xf * 16777216.0f);
             vf4[l] = xf / 64.0f;

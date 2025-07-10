@@ -299,12 +299,14 @@ void Core::set_job(
 
   // start rx job compute threads
   if (new_dev == DEV::RX_CPU) {
+    std::atomic<int> unique_counter{0};
     // need static copy here so it will be alive in rx threads
     static uint8_t new_input2[MAX_BLOB_LEN];
     memcpy(new_input2, new_input, m_input_len);
     const unsigned job_ref = m_job_ref;
     for (unsigned batch_id = 0; batch_id != m_batch; ++batch_id) m_thread_pool->push(
-      [=, &m_job_ref = m_job_ref, &m_hash_count = m_hash_count](int thread_id) {
+      [=, &m_job_ref = m_job_ref, &m_hash_count = m_hash_count, &unique_counter](int) {
+        const int thread_id = unique_counter.fetch_add(1);
         try {
           alignas(16) uint8_t  input[MAX_BLOB_LEN];
           alignas(16) uint8_t  output[HASH_LEN];
