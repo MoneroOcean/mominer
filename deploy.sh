@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+
+tag=$1
+
 ./r.sh node test.js &&\
 docker create --name moner moner-build &&\
 (test -d deploy && rm -rf deploy || true) &&\
@@ -29,3 +32,4 @@ docker run --privileged --rm --name moner-deploy --hostname moner-deploy --devic
            -it moner-deploy ./moner.sh "$@"
 EOF
 chmod +x deploy/moner.sh deploy/docker-moner.sh
+rm -rf *.tgz; (cd deploy; tar -cf - * | gzip -9 > ../moner-$tag.tgz)
