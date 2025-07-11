@@ -1,4 +1,4 @@
-// Copyright GNU GPLv3 (c) 2023-2025 MoneroOcean <support@moneroocean.stream>
+// Copyright GNU GPLv3 (c) 2023-2023 MoneroOcean <support@moneroocean.stream>
 
 // SYCL cn/gpu miner prototype based on xmr-stak (https://github.com/fireice-uk/xmr-stak)
 // OpenCL mining code by wolf9466, fireice_uk and psychocrypt
@@ -7,7 +7,6 @@
 #include <chrono>
 #include "sycl-lib-internal.h"
 #include "consts.h"
-
 
 const unsigned HASH_DATA_AREA = 136;
 const unsigned CN_MEMORY      = 2 * 1024 * 1024;
@@ -245,25 +244,35 @@ void aes_expend_key(uint32_t* const keybuf) {
 }
 
 inline void aes_round(
+  sycl::uint4* const px, const sycl::uint4 key, const uint32_t* const * const aes
+) {
+  union { uint8_t b[4]; uint32_t u; } u0, u1, u2, u3;
+  u0.u = px->x(); u1.u = px->y(); u2.u = px->z(); u3.u = px->w();
+  px->x() = key[0] ^ aes[0][u0.b[0]] ^ aes[1][u1.b[1]] ^ aes[2][u2.b[2]] ^ aes[3][u3.b[3]];
+  px->y() = key[1] ^ aes[0][u1.b[0]] ^ aes[1][u2.b[1]] ^ aes[2][u3.b[2]] ^ aes[3][u0.b[3]];
+  px->z() = key[2] ^ aes[0][u2.b[0]] ^ aes[1][u3.b[1]] ^ aes[2][u0.b[2]] ^ aes[3][u1.b[3]];
+  px->w() = key[3] ^ aes[0][u3.b[0]] ^ aes[1][u0.b[1]] ^ aes[2][u1.b[2]] ^ aes[3][u2.b[3]];
+}
+
+ inline void aes_round(
   sycl::uint4* const px, const sycl::uint4 key,
   const sycl::local_accessor<uint32_t, 1>& aes0,
   const sycl::local_accessor<uint32_t, 1>& aes1,
   const sycl::local_accessor<uint32_t, 1>& aes2,
   const sycl::local_accessor<uint32_t, 1>& aes3
-) {
-  union { uint8_t b[4]; uint32_t u; } u0, u1, u2, u3;
-  u0.u = px->x(); u1.u = px->y(); u2.u = px->z(); u3.u = px->w();
-  px->x() = key[0] ^ aes0[u0.b[0]] ^ aes1[u1.b[1]] ^ aes2[u2.b[2]] ^ aes3[u3.b[3]];
-  px->y() = key[1] ^ aes0[u1.b[0]] ^ aes1[u2.b[1]] ^ aes2[u3.b[2]] ^ aes3[u0.b[3]];
-  px->z() = key[2] ^ aes0[u2.b[0]] ^ aes1[u3.b[1]] ^ aes2[u0.b[2]] ^ aes3[u1.b[3]];
-  px->w() = key[3] ^ aes0[u3.b[0]] ^ aes1[u0.b[1]] ^ aes2[u1.b[2]] ^ aes3[u2.b[3]];
+ ) {
+   union { uint8_t b[4]; uint32_t u; } u0, u1, u2, u3;
+   u0.u = px->x(); u1.u = px->y(); u2.u = px->z(); u3.u = px->w();
+   px->x() = key[0] ^ aes0[u0.b[0]] ^ aes1[u1.b[1]] ^ aes2[u2.b[2]] ^ aes3[u3.b[3]];
+   px->y() = key[1] ^ aes0[u1.b[0]] ^ aes1[u2.b[1]] ^ aes2[u3.b[2]] ^ aes3[u0.b[3]];
+   px->z() = key[2] ^ aes0[u2.b[0]] ^ aes1[u3.b[1]] ^ aes2[u0.b[2]] ^ aes3[u1.b[3]];
+   px->w() = key[3] ^ aes0[u3.b[0]] ^ aes1[u0.b[1]] ^ aes2[u1.b[2]] ^ aes3[u2.b[3]];
 }
 
 void cn_gpu(
   const uint8_t* const inputs, const unsigned input_size, uint8_t* const output,
-  void*, void*, const unsigned batch, const std::string& dev_str
+  void*, void* const Spads, const unsigned batch, const std::string& dev_str
 ) {
-  uint64_t spads_res[25 * batch];
   try {
     const auto exception_handler = [] (sycl::exception_list exceptions) {
       for (std::exception_ptr const& e : exceptions) {
@@ -285,15 +294,16 @@ void cn_gpu(
     }
     static auto kb = sycl::get_kernel_bundle<sycl::bundle_state::executable>(q.get_context());
 
-    auto bInputs = sycl::buffer(inputs, sycl::range(input_size * batch));
-    auto spads   = sycl::malloc_device<uint64_t>(25 * batch, q);
-    auto spads4  = reinterpret_cast<uint32_t*>(spads);
-    auto lpads   = sycl::malloc_device<uint64_t>(CN_MEMORY8 * batch, q);
-    auto lpads4  = reinterpret_cast<int32_t*>(lpads);
-    auto lpads16 = reinterpret_cast<sycl::uint4*>(lpads);
+    auto bInputs  = sycl::buffer(inputs, sycl::range(input_size * batch));
+    auto bSpads   = sycl::buffer(static_cast<uint64_t*>(Spads), sycl::range(25 * batch));
+    auto bSpads4  = bSpads.reinterpret<uint32_t>(sycl::range(2 * 25 * batch));
+    sycl::buffer<uint64_t> bLpads(sycl::range(CN_MEMORY8 * batch));
+    auto bLpads4  = bLpads.reinterpret<int32_t>(sycl::range(CN_MEMORY4 * batch));
+    auto bLpads16 = bLpads.reinterpret<sycl::uint4>(sycl::range(CN_MEMORY16 * batch));
 
     q.submit([&](sycl::handler& h) { // cn0_cn_gpu
       const auto inputs = bInputs.get_access<sycl::access::mode::read>(h);
+      const auto spads  = bSpads.get_access<sycl::access::mode::discard_write>(h);
       //sycl::stream os(1024, 128, h);
       h.use_kernel_bundle(kb);
       h.parallel_for(sycl::range(batch), [=](sycl::id<1> t) {
@@ -308,6 +318,8 @@ void cn_gpu(
     });
 
     q.submit([&](sycl::handler& h) { // cn00_cn_gpu
+      const auto spads = bSpads.get_access<sycl::access::mode::read>(h);
+      const auto lpads = bLpads.get_access<sycl::access::mode::discard_write>(h);
       const unsigned THREADS2 = CN_MEMORY8 / 64;
       h.use_kernel_bundle(kb);
       h.parallel_for(sycl::range(batch * THREADS2), [=](sycl::id<1> t) {
@@ -320,8 +332,10 @@ void cn_gpu(
     });
 
     q.submit([&](sycl::handler& h) { // cn1_cn_gpu
-      const auto vi0 = sycl::local_accessor<sycl::int4,   1>(sycl::range(16), h);
-      const auto vf0 = sycl::local_accessor<sycl::float4, 1>(sycl::range(16), h);
+      const auto spads = bSpads4.get_access<sycl::access::mode::read>(h);
+      const auto lpads = bLpads4.get_access<sycl::access::mode::read_write>(h);
+      const auto vi0   = sycl::local_accessor<sycl::int4,   1>(sycl::range(16), h);
+      const auto vf0   = sycl::local_accessor<sycl::float4, 1>(sycl::range(16), h);
       h.use_kernel_bundle(kb);
       h.parallel_for(sycl::nd_range(sycl::range(batch * 16), sycl::range(16)),
                      [=](sycl::nd_item<1> nd
@@ -339,8 +353,8 @@ void cn_gpu(
           1.4140625f, 1.2734375f, 1.2578125f, 1.2890625f,
           1.3203125f, 1.3515625f, 1.3359375f, 1.4609375f
         };
-        const uint32_t* const spad = &spads4[nd.get_group().get_group_id() * (25 * 2)];
-        int32_t* const lpad = &lpads4[nd.get_group().get_group_id() * CN_MEMORY4];
+        const uint32_t* const spad = &spads[nd.get_group().get_group_id() * (25 * 2)];
+        int32_t* const lpad = &lpads[nd.get_group().get_group_id() * CN_MEMORY4];
         uint32_t s = *spad >> 8;
         sycl::float4 sf(0.0f);
 
@@ -384,12 +398,14 @@ void cn_gpu(
 
     q.submit([&](sycl::handler& h) { // cn2
       const unsigned THREADS2 = 8;
-      const auto aes0 = sycl::local_accessor<uint32_t, 1>(sycl::range(256), h);
-      const auto aes1 = sycl::local_accessor<uint32_t, 1>(sycl::range(256), h);
-      const auto aes2 = sycl::local_accessor<uint32_t, 1>(sycl::range(256), h);
-      const auto aes3 = sycl::local_accessor<uint32_t, 1>(sycl::range(256), h);
-      const auto x1   = sycl::local_accessor<sycl::uint4, 2>(sycl::range(THREADS2, 8), h);
-      const auto x2   = sycl::local_accessor<sycl::uint4, 2>(sycl::range(THREADS2, 8), h);
+      const auto spads = bSpads4 .get_access<sycl::access::mode::read_write>(h);
+      const auto lpads = bLpads16.get_access<sycl::access::mode::read>(h);
+      const auto aes0  = sycl::local_accessor<uint32_t, 1>(sycl::range(256), h);
+      const auto aes1  = sycl::local_accessor<uint32_t, 1>(sycl::range(256), h);
+      const auto aes2  = sycl::local_accessor<uint32_t, 1>(sycl::range(256), h);
+      const auto aes3  = sycl::local_accessor<uint32_t, 1>(sycl::range(256), h);
+      const auto x1    = sycl::local_accessor<sycl::uint4, 2>(sycl::range(THREADS2, 8), h);
+      const auto x2    = sycl::local_accessor<sycl::uint4, 2>(sycl::range(THREADS2, 8), h);
       h.use_kernel_bundle(kb);
       h.parallel_for(sycl::nd_range(sycl::range(batch, 8), sycl::range(THREADS2, 8)),
                      [=](sycl::nd_item<2> nd
@@ -406,8 +422,8 @@ void cn_gpu(
         }
         nd.barrier(sycl::access::fence_space::local_space);
 
-        const auto spad = spads4 + (nd.get_global_id(0) * (25 * 2));
-        const sycl::uint4* const lpad = &lpads16[nd.get_global_id(0) * CN_MEMORY16];
+        const auto spad = spads.get_multi_ptr<sycl::access::decorated::no>() + (nd.get_global_id(0) * (25 * 2));
+        const sycl::uint4* const lpad = &lpads[nd.get_global_id(0) * CN_MEMORY16];
         sycl::uint4 x;
         x.load(l1 + 4, spad);
         union { uint32_t key[40]; sycl::uint4 key4[10]; sycl::uint8 key8[5]; };
@@ -448,9 +464,6 @@ void cn_gpu(
     });
 
     q.wait_and_throw();
-    q.memcpy(spads_res, spads, 25 * batch * sizeof(uint64_t)).wait();
-    sycl::free(lpads, q);
-    sycl::free(spads, q);
 
   } catch (sycl::exception const& e) {
     printf("Caught synchronous SYCL exception:\n%s\n", e.what());
@@ -458,7 +471,7 @@ void cn_gpu(
   }
 
   for (unsigned i = 0; i != batch; ++ i) {
-    keccak(spads_res + 25*i);
-    memcpy(output + HASH_LEN*i, spads_res + 25*i, HASH_LEN);
+    keccak(static_cast<uint64_t*>(Spads) + 25*i);
+    memcpy(output + HASH_LEN*i, static_cast<uint64_t*>(Spads) + 25*i, HASH_LEN);
   }
 }
