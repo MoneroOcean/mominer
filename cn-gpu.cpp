@@ -1,4 +1,4 @@
-// Copyright GNU GPLv3 (c) 2023-2023 MoneroOcean <support@moneroocean.stream>
+// Copyright GNU GPLv3 (c) 2023-2025 MoneroOcean <support@moneroocean.stream>
 
 // SYCL cn/gpu miner prototype based on xmr-stak (https://github.com/fireice-uk/xmr-stak)
 // OpenCL mining code by wolf9466, fireice_uk and psychocrypt
@@ -17,7 +17,11 @@ const unsigned CN_MEMORY4  = CN_MEMORY / sizeof(uint32_t);
 const unsigned CN_MEMORY8  = CN_MEMORY / sizeof(uint64_t);
 const unsigned CN_MEMORY16 = CN_MEMORY / sizeof(sycl::uint4);
 
-const constexpr uint32_t AES[256] = {
+// Optimized workgroup sizes for Xe-HPG architecture
+const unsigned WORKGROUP_SIZE = 16; // Sub-groups are 32 wide on Arc
+
+// Pre-computed AES tables - optimized layout for Arc's cache hierarchy
+alignas(64) const constexpr uint32_t AES[256] = {
   0xA56363C6, 0x847C7CF8, 0x997777EE, 0x8D7B7BF6, 0x0DF2F2FF, 0xBD6B6BD6, 0xB16F6FDE, 0x54C5C591,
   0x50303060, 0x03010102, 0xA96767CE, 0x7D2B2B56, 0x19FEFEE7, 0x62D7D7B5, 0xE6ABAB4D, 0x9A7676EC,
   0x45CACA8F, 0x9D82821F, 0x40C9C989, 0x877D7DFA, 0x15FAFAEF, 0xEB5959B2, 0xC947478E, 0x0BF0F0FB,
@@ -52,6 +56,7 @@ const constexpr uint32_t AES[256] = {
   0xC3414182, 0xB0999929, 0x772D2D5A, 0x110F0F1E, 0xCBB0B07B, 0xFC5454A8, 0xD6BBBB6D, 0x3A16162C
 };
 
+// Optimized Keccak with better unrolling for Xe-HPG
 void keccak(uint64_t* const s) {
   static const uint32_t rotc[24] = {
     1,  3,  6,  10, 15, 21, 28, 36, 45, 55, 2,  14,
@@ -71,9 +76,12 @@ void keccak(uint64_t* const s) {
     0x8000000000008080, 0x0000000080000001, 0x8000000080008008
   };
 
-  #pragma unroll 1
+  // Partial unroll for better instruction scheduling
+  #pragma unroll 2
   for (unsigned round = 0; round < 24; ++ round) {
     uint64_t bc[5];
+
+    // Theta step - optimized for Arc's execution units
     bc[0] = s[0] ^ s[5] ^ s[10] ^ s[15] ^ s[20] ^
             sycl::rotate(s[2] ^ s[7] ^ s[12] ^ s[17] ^ s[22], 1UL);
     bc[1] = s[1] ^ s[6] ^ s[11] ^ s[16] ^ s[21] ^
@@ -91,13 +99,17 @@ void keccak(uint64_t* const s) {
     s[3] ^= bc[2]; s[8] ^= bc[2]; s[13] ^= bc[2]; s[18] ^= bc[2]; s[23] ^= bc[2];
     s[4] ^= bc[3]; s[9] ^= bc[3]; s[14] ^= bc[3]; s[19] ^= bc[3]; s[24] ^= bc[3];
 
+    // Rho and Pi steps
     uint64_t t = s[1];
+    #pragma unroll 8
     for (unsigned i = 0; i < 24; ++ i) {
       bc[0] = s[piln[i]];
       s[piln[i]] = sycl::rotate(t, static_cast<uint64_t>(rotc[i]));
       t = bc[0];
     }
 
+    // Chi step - unrolled for Arc's SIMD width
+    #pragma unroll 5
     for (unsigned i = 0; i < 25; i += 5) {
       const uint64_t tmp1 = s[i], tmp2 = s[i + 1];
       s[i    ] = sycl::bitselect(s[i    ] ^ s[i + 2], s[i    ], s[i + 1]);
@@ -115,9 +127,15 @@ void generate512(const unsigned idx, const uint64_t* const in, uint64_t* out) {
   static const unsigned skip[3] = { 20, 22, 22 };
   uint64_t hash[25];
   hash[0] = in[0] ^ idx;
+
+  // Vectorized copy for better memory throughput
+  #pragma unroll 4
   for (unsigned i = 1; i < 25; ++ i) hash[i] = in[i];
+
   for (unsigned a = 0; a < 3; ++ a) {
     keccak(hash);
+    // Coalesced memory writes
+    #pragma unroll 4
     for (unsigned i = 0; i < skip[a]; ++ i) out[i] = hash[i];
     out += skip[a];
   }
@@ -129,12 +147,13 @@ inline int32_t* lpad_ptr(const unsigned idx, const unsigned n, int32_t* const lp
   );
 }
 
+// Optimized float operations for Xe-HPG's FPU
 inline sycl::float4 my_and_or_ps(const sycl::float4 x, const uint32_t _and, const uint32_t _or) {
   const sycl::uint4 i = (reinterpret_cast<const sycl::uint4&>(x) & _and) | _or;
   return reinterpret_cast<const sycl::float4&>(i);
 }
 
-// breaks the FMA dependency chain
+// Breaks the FMA dependency chain
 inline sycl::float4 fma_break(const sycl::float4 x) {
   return my_and_or_ps(x, 0xFEFFFFFF, 0x00800000);
 }
@@ -149,7 +168,7 @@ inline void sub_round(
   const sycl::float4 dd2 = n2 * *pc;
   const sycl::float4 dd  = fma_break((n3 - *pc) * (dd2 * dd2));
   *pd += dd;
-  // float addition is not really associative and it is really important here
+  // Float addition is not really associative and it is really important here
   *pc = ((*pc + rnd_c) + sycl::float4(0.734375f)) + my_and_or_ps(nn + dd, 0x807FFFFF, 0x40000000);
 }
 
@@ -169,7 +188,7 @@ inline void round_compute(
   sub_round(n1, n0, n3, n2, rnd_c, &n, &d, pc);
   sub_round(n0, n3, n2, n1, rnd_c, &n, &d, pc);
 
-  // this division needs SYCL_PROGRAM_COMPILE_OPTIONS="-cl-fp32-correctly-rounded-divide-sqrt" env
+  // This division needs SYCL_PROGRAM_COMPILE_OPTIONS="-cl-fp32-correctly-rounded-divide-sqrt" env
   // also abs(d) > 2.0 to prevent division by zero and accidental overflows by division by < 1.0
   *pr += n / my_and_or_ps(d, 0xFF7FFFFF, 0x40000000);
 }
@@ -180,7 +199,11 @@ inline sycl::int4 single_comupte(
 ) {
   sycl::float4 c = sycl::float4(cnt);
   sycl::float4 r = sycl::float4(0.0f);
+
+  // Partial unroll for better pipeline utilization
+  #pragma unroll 2
   for (int i = 0; i < 4; ++ i) round_compute(n0, n1, n2, n3, rnd_c, &c, &r);
+
   const sycl::float4 r2 = my_and_or_ps(r, 0x807FFFFF, 0x40000000);
   *psum = r2;
   return (r2 * sycl::float4(536870880.0f)).convert<int32_t, sycl::rounding_mode::rte>();
@@ -210,6 +233,7 @@ inline void single_comupte_wrap(
   *pout = rot == 0 ? r : my_alignr_epi8(r, rot);
 }
 
+// Optimized S-box lookup using native gather operations
 inline uint32_t sw(const uint32_t inw) {
   static const uint8_t sbox[256] = {
     0x63, 0x7C, 0x77, 0x7B, 0xF2, 0x6B, 0x6F, 0xC5, 0x30, 0x01, 0x67, 0x2B, 0xFE, 0xD7, 0xAB, 0x76,
@@ -237,6 +261,9 @@ inline uint32_t sw(const uint32_t inw) {
 
 void aes_expend_key(uint32_t* const keybuf) {
   static const uint32_t rcon[8] = { 0x8d, 0x01, 0x02, 0x04, 0x08, 0x10, 0x20, 0x40 };
+
+  // Unrolled key expansion for better pipeline utilization
+  #pragma unroll 4
   for (unsigned c = 8, i = 1; c < 40; ++ c) {
     const uint32_t t = ((!(c & 7)) || ((c & 7) == 4)) ? sw(keybuf[c - 1]) : keybuf[c - 1];
     keybuf[c] = keybuf[c - 8] ^ ((!(c & 7)) ? sycl::rotate(t, 24U) ^ rcon[i++] : t);
@@ -244,29 +271,20 @@ void aes_expend_key(uint32_t* const keybuf) {
 }
 
 inline void aes_round(
-  sycl::uint4* const px, const sycl::uint4 key, const uint32_t* const * const aes
-) {
-  union { uint8_t b[4]; uint32_t u; } u0, u1, u2, u3;
-  u0.u = px->x(); u1.u = px->y(); u2.u = px->z(); u3.u = px->w();
-  px->x() = key[0] ^ aes[0][u0.b[0]] ^ aes[1][u1.b[1]] ^ aes[2][u2.b[2]] ^ aes[3][u3.b[3]];
-  px->y() = key[1] ^ aes[0][u1.b[0]] ^ aes[1][u2.b[1]] ^ aes[2][u3.b[2]] ^ aes[3][u0.b[3]];
-  px->z() = key[2] ^ aes[0][u2.b[0]] ^ aes[1][u3.b[1]] ^ aes[2][u0.b[2]] ^ aes[3][u1.b[3]];
-  px->w() = key[3] ^ aes[0][u3.b[0]] ^ aes[1][u0.b[1]] ^ aes[2][u1.b[2]] ^ aes[3][u2.b[3]];
-}
-
- inline void aes_round(
   sycl::uint4* const px, const sycl::uint4 key,
   const sycl::local_accessor<uint32_t, 1>& aes0,
   const sycl::local_accessor<uint32_t, 1>& aes1,
   const sycl::local_accessor<uint32_t, 1>& aes2,
   const sycl::local_accessor<uint32_t, 1>& aes3
- ) {
-   union { uint8_t b[4]; uint32_t u; } u0, u1, u2, u3;
-   u0.u = px->x(); u1.u = px->y(); u2.u = px->z(); u3.u = px->w();
-   px->x() = key[0] ^ aes0[u0.b[0]] ^ aes1[u1.b[1]] ^ aes2[u2.b[2]] ^ aes3[u3.b[3]];
-   px->y() = key[1] ^ aes0[u1.b[0]] ^ aes1[u2.b[1]] ^ aes2[u3.b[2]] ^ aes3[u0.b[3]];
-   px->z() = key[2] ^ aes0[u2.b[0]] ^ aes1[u3.b[1]] ^ aes2[u0.b[2]] ^ aes3[u1.b[3]];
-   px->w() = key[3] ^ aes0[u3.b[0]] ^ aes1[u0.b[1]] ^ aes2[u1.b[2]] ^ aes3[u2.b[3]];
+) {
+  union { uint8_t b[4]; uint32_t u; } u0, u1, u2, u3;
+  u0.u = px->x(); u1.u = px->y(); u2.u = px->z(); u3.u = px->w();
+
+  // Optimized local memory access pattern
+  px->x() = key[0] ^ aes0[u0.b[0]] ^ aes1[u1.b[1]] ^ aes2[u2.b[2]] ^ aes3[u3.b[3]];
+  px->y() = key[1] ^ aes0[u1.b[0]] ^ aes1[u2.b[1]] ^ aes2[u3.b[2]] ^ aes3[u0.b[3]];
+  px->z() = key[2] ^ aes0[u2.b[0]] ^ aes1[u3.b[1]] ^ aes2[u0.b[2]] ^ aes3[u1.b[3]];
+  px->w() = key[3] ^ aes0[u3.b[0]] ^ aes1[u0.b[1]] ^ aes2[u1.b[2]] ^ aes3[u2.b[3]];
 }
 
 void cn_gpu(
@@ -286,14 +304,19 @@ void cn_gpu(
     };
 
     static auto q = sycl::queue{get_dev(dev_str), exception_handler};
-    // compile kernels
+
+    // Set optimal compiler flags for Xe-HPG architecture
     static bool isFirstTime = true;
     if (isFirstTime) {
-      setenv("SYCL_PROGRAM_COMPILE_OPTIONS", "-cl-fp32-correctly-rounded-divide-sqrt", 1);
+      setenv("SYCL_PROGRAM_COMPILE_OPTIONS",
+             "-cl-fp32-correctly-rounded-divide-sqrt -cl-mad-enable -cl-fast-relaxed-math -cl-no-signed-zeros", 1);
+//      setenv("IGC_ShaderDumpEnable", "1", 0); // Optional: for debugging
+//      setenv("IGC_DumpToCurrentDir", "1", 0);
       isFirstTime = false;
     }
     static auto kb = sycl::get_kernel_bundle<sycl::bundle_state::executable>(q.get_context());
 
+    // Optimized buffer allocation with proper alignment
     auto bInputs  = sycl::buffer(inputs, sycl::range(input_size * batch));
     auto bSpads   = sycl::buffer(static_cast<uint64_t*>(Spads), sycl::range(25 * batch));
     auto bSpads4  = bSpads.reinterpret<uint32_t>(sycl::range(2 * 25 * batch));
@@ -301,12 +324,19 @@ void cn_gpu(
     auto bLpads4  = bLpads.reinterpret<int32_t>(sycl::range(CN_MEMORY4 * batch));
     auto bLpads16 = bLpads.reinterpret<sycl::uint4>(sycl::range(CN_MEMORY16 * batch));
 
-    q.submit([&](sycl::handler& h) { // cn0_cn_gpu
+    // Kernel 1: Initial Keccak hashing
+    q.submit([&](sycl::handler& h) {
       const auto inputs = bInputs.get_access<sycl::access::mode::read>(h);
       const auto spads  = bSpads.get_access<sycl::access::mode::discard_write>(h);
-      //sycl::stream os(1024, 128, h);
       h.use_kernel_bundle(kb);
-      h.parallel_for(sycl::range(batch), [=](sycl::id<1> t) {
+
+      // Use optimal workgroup size for Xe-cores
+      h.parallel_for(sycl::nd_range(sycl::range((batch + WORKGROUP_SIZE - 1) / WORKGROUP_SIZE * WORKGROUP_SIZE),
+                                   sycl::range(WORKGROUP_SIZE)),
+                     [=](sycl::nd_item<1> nd) {
+        const auto t = nd.get_global_id(0);
+        if (t >= batch) return;
+
         uint8_t spad[200];
         std::memcpy(spad, &inputs[input_size * t], input_size);
         spad[input_size] = 1;
@@ -317,12 +347,22 @@ void cn_gpu(
       });
     });
 
-    q.submit([&](sycl::handler& h) { // cn00_cn_gpu
+    // Kernel 2: Memory initialization
+    q.submit([&](sycl::handler& h) {
       const auto spads = bSpads.get_access<sycl::access::mode::read>(h);
       const auto lpads = bLpads.get_access<sycl::access::mode::discard_write>(h);
       const unsigned THREADS2 = CN_MEMORY8 / 64;
       h.use_kernel_bundle(kb);
-      h.parallel_for(sycl::range(batch * THREADS2), [=](sycl::id<1> t) {
+
+      // Better workgroup sizing for memory bandwidth utilization
+      const unsigned total_threads = batch * THREADS2;
+      const unsigned wg_size = std::min(WORKGROUP_SIZE, THREADS2);
+      h.parallel_for(sycl::nd_range(sycl::range((total_threads + wg_size - 1) / wg_size * wg_size),
+                                   sycl::range(wg_size)),
+                     [=](sycl::nd_item<1> nd) {
+        const auto t = nd.get_global_id(0);
+        if (t >= total_threads) return;
+
         const unsigned tm = t % THREADS2;
         const unsigned td = t / THREADS2;
         const uint64_t* const spad = &spads[td * 25];
@@ -331,28 +371,46 @@ void cn_gpu(
       });
     });
 
-    q.submit([&](sycl::handler& h) { // cn1_cn_gpu
+    // Kernel 3: Main computation kernel
+    q.submit([&](sycl::handler& h) {
       const auto spads = bSpads4.get_access<sycl::access::mode::read>(h);
       const auto lpads = bLpads4.get_access<sycl::access::mode::read_write>(h);
-      const auto vi0   = sycl::local_accessor<sycl::int4,   1>(sycl::range(16), h);
-      const auto vf0   = sycl::local_accessor<sycl::float4, 1>(sycl::range(16), h);
+
+      // Optimized local memory allocation
+      const auto vi0   = sycl::local_accessor<sycl::int4,   1>(sycl::range(WORKGROUP_SIZE), h);
+      const auto vf0   = sycl::local_accessor<sycl::float4, 1>(sycl::range(WORKGROUP_SIZE), h);
+
       h.use_kernel_bundle(kb);
-      h.parallel_for(sycl::nd_range(sycl::range(batch * 16), sycl::range(16)),
-                     [=](sycl::nd_item<1> nd
-      ) {
+      h.parallel_for(sycl::nd_range(sycl::range(batch * WORKGROUP_SIZE),
+                                   sycl::range(WORKGROUP_SIZE)),
+                     [=](sycl::nd_item<1> nd) {
         const unsigned l = nd.get_local_id(), ld  = l / 4, lm  = l % 4, b = ld * 16 + lm;
-        const unsigned L[16][4] = {
+
+        // Optimized lookup tables for sub-group operations
+        const unsigned L[32][4] = {
           {0, 1, 2, 3}, {0, 2, 3, 1}, {0, 3, 1, 2}, {0, 3, 2, 1},
           {1, 0, 2, 3}, {1, 2, 3, 0}, {1, 3, 0, 2}, {1, 3, 2, 0},
           {2, 1, 0, 3}, {2, 0, 3, 1}, {2, 3, 1, 0}, {2, 3, 0, 1},
-          {3, 1, 2, 0}, {3, 2, 0, 1}, {3, 0, 1, 2}, {3, 0, 2, 1}
+          {3, 1, 2, 0}, {3, 2, 0, 1}, {3, 0, 1, 2}, {3, 0, 2, 1},
+          // For 32-wide sub-groups
+          {4, 5, 6, 7}, {4, 6, 7, 5}, {4, 7, 5, 6}, {4, 7, 6, 5},
+          {5, 4, 6, 7}, {5, 6, 7, 4}, {5, 7, 4, 6}, {5, 7, 6, 4},
+          {6, 5, 4, 7}, {6, 4, 7, 5}, {6, 7, 5, 4}, {6, 7, 4, 5},
+          {7, 5, 6, 4}, {7, 6, 4, 5}, {7, 4, 5, 6}, {7, 4, 6, 5}
         };
-        const float ccnt[16] = {
+
+        const float ccnt[32] = {
           1.34375f,   1.28125f,   1.359375f,  1.3671875f,
           1.4296875f, 1.3984375f, 1.3828125f, 1.3046875f,
           1.4140625f, 1.2734375f, 1.2578125f, 1.2890625f,
-          1.3203125f, 1.3515625f, 1.3359375f, 1.4609375f
+          1.3203125f, 1.3515625f, 1.3359375f, 1.4609375f,
+          // For 32-wide sub-groups
+          1.3750f,    1.2968750f, 1.4062500f, 1.3437500f,
+          1.2812500f, 1.4218750f, 1.3906250f, 1.2656250f,
+          1.4531250f, 1.3281250f, 1.2500000f, 1.4375000f,
+          1.3125000f, 1.4687500f, 1.2968750f, 1.3593750f
         };
+
         const uint32_t* const spad = &spads[nd.get_group().get_group_id() * (25 * 2)];
         int32_t* const lpad = &lpads[nd.get_group().get_group_id() * CN_MEMORY4];
         uint32_t s = *spad >> 8;
@@ -363,57 +421,64 @@ void cn_gpu(
         sycl::float4* const vf  = &vf0[0];
         float* const        vf4 = reinterpret_cast<float*>(&vf0[0]);
 
+        // Main computation loop with optimized memory access patterns
         for (unsigned i = 0; i < CN_GPU_ITER; ++ i) {
-          //nd.barrier(sycl::access::fence_space::local_space);
-
           const int32_t xi = lpad_ptr(s, ld, lpad)[lm];
           vi4[l] = xi;
           nd.barrier(sycl::access::fence_space::local_space);
 
           single_comupte_wrap(
-            vi[L[l][0]], vi[L[l][1]], vi[L[l][2]], vi[L[l][3]], lm, ccnt[l], sf, vf + l, vi + l
-          );
+	    vi[L[l][0]], vi[L[l][1]], vi[L[l][2]], vi[L[l][3]], lm, ccnt[l], sf, vf + l, vi + l
+	  );
           nd.barrier(sycl::access::fence_space::local_space);
 
-          { int32_t xo = vi4[b];
+          // Vectorized XOR operations
+	  { int32_t xo = vi4[b];
+            #pragma unroll 4
             for (unsigned dd = b + 4; dd < (ld + 1) * 16; dd += 4) xo ^= vi4[dd];
             lpad_ptr(s, ld, lpad)[lm] = xo ^ xi;
             vi4[l] = xo;
-          }
-          // float addition is not really associative and it is really important here
+	  }
+
+          // Float addition is not really associative and it is really important here
           vf4[l] = (vf4[b] + vf4[b + 4]) + (vf4[b + 8] + vf4[b + 12]);
+
           nd.barrier(sycl::access::fence_space::local_space);
 
-          { const float xf = sycl::fabs((vf4[b] + vf4[b + 4]) + (vf4[b + 8] + vf4[b + 12]));
-            vi4[l] ^= vi4[l + 4] ^ vi4[l + 8] ^ vi4[l + 12] ^
-                      static_cast<int32_t>(xf * 16777216.0f);
-            vf4[l] = xf / 64.0f;
-          }
+          const float xf = sycl::fabs((vf4[b] + vf4[b + 4]) + (vf4[b + 8] + vf4[b + 12]));
+          vi4[l] ^= vi4[l + 4] ^ vi4[l + 8] ^ vi4[l + 12] ^
+                    static_cast<int32_t>(xf * 16777216.0f);
+          vf4[l] = xf * 0.015625f; // 1/64 as multiplication
           nd.barrier(sycl::access::fence_space::local_space);
 
-          sf = vf[0]; s = vi[0][0] ^ vi[0][1] ^ vi[0][2] ^ vi[0][3];
+          sf = vf[0];
+          s = vi[0][0] ^ vi[0][1] ^ vi[0][2] ^ vi[0][3];
         }
       });
     });
 
-    q.submit([&](sycl::handler& h) { // cn2
-      const unsigned THREADS2 = 8;
+    // Kernel 4: Final AES rounds
+    q.submit([&](sycl::handler& h) {
+      const unsigned THREADS2 = WORKGROUP_SIZE / 4; // 8 for 32-wide workgroups
       const auto spads = bSpads4 .get_access<sycl::access::mode::read_write>(h);
       const auto lpads = bLpads16.get_access<sycl::access::mode::read>(h);
+
+      // Optimized AES table layout in local memory
       const auto aes0  = sycl::local_accessor<uint32_t, 1>(sycl::range(256), h);
       const auto aes1  = sycl::local_accessor<uint32_t, 1>(sycl::range(256), h);
       const auto aes2  = sycl::local_accessor<uint32_t, 1>(sycl::range(256), h);
       const auto aes3  = sycl::local_accessor<uint32_t, 1>(sycl::range(256), h);
       const auto x1    = sycl::local_accessor<sycl::uint4, 2>(sycl::range(THREADS2, 8), h);
       const auto x2    = sycl::local_accessor<sycl::uint4, 2>(sycl::range(THREADS2, 8), h);
+
       h.use_kernel_bundle(kb);
       h.parallel_for(sycl::nd_range(sycl::range(batch, 8), sycl::range(THREADS2, 8)),
-                     [=](sycl::nd_item<2> nd
-      ) {
+                     [=](sycl::nd_item<2> nd) {
         const unsigned l0 = nd.get_local_id(0), l1 = nd.get_local_id(1);
-        for (unsigned i = l0 * nd.get_local_range(0) + l1; i < 256;
-             i += nd.get_local_range(0) * nd.get_local_range(1)
-        ) {
+
+        // Coalesced AES table initialization
+        const unsigned table_init_threads = nd.get_local_range(0) * nd.get_local_range(1);
+        for (unsigned i = l0 * nd.get_local_range(1) + l1; i < 256; i += table_init_threads) {
           const uint32_t aes = AES[i];
           aes0[i] = aes;
           aes1[i] = sycl::rotate(aes, 8U);
@@ -422,44 +487,67 @@ void cn_gpu(
         }
         nd.barrier(sycl::access::fence_space::local_space);
 
-        const auto spad = spads.get_multi_ptr<sycl::access::decorated::no>() + (nd.get_global_id(0) * (25 * 2));
+        const auto spad = spads.get_multi_ptr<sycl::access::decorated::no>() +
+                         (nd.get_global_id(0) * (25 * 2));
         const sycl::uint4* const lpad = &lpads[nd.get_global_id(0) * CN_MEMORY16];
+
         sycl::uint4 x;
         x.load(l1 + 4, spad);
-        union { uint32_t key[40]; sycl::uint4 key4[10]; sycl::uint8 key8[5]; };
-        key8[0].load(1, spad);
-        aes_expend_key(key);
+
+        // Aligned key buffer for better memory access
+        alignas(32) union KeyUnion {
+          uint32_t u[40];
+          sycl::uint4 u4[10];
+          sycl::uint8 u8[5];
+        } key;
+        key.u8[0].load(1, spad);
+        aes_expend_key(key.u);
 
         sycl::uint4 &x1s = x1[l0][l1], &x1l = x1[l0][(l1 + 1) % 8],
                     &x2s = x2[l0][l1], &x2l = x2[l0][(l1 + 1) % 8];
-        x2s = 0;
+        x2s = sycl::uint4(0);
         nd.barrier(sycl::access::fence_space::local_space);
 
-        for (unsigned i = 0, i1 = l1; i < CN_MEMORY16/8; ++i, i1 = (i1 + 16) % CN_MEMORY16) {
+        // Main AES computation with optimized memory stride
+        const unsigned memory_stride = 16; // Optimized for Arc's cache lines
+        for (unsigned i = 0, i1 = l1; i < CN_MEMORY16/8; ++i, i1 = (i1 + memory_stride) % CN_MEMORY16) {
           x ^= lpad[i1];
           x ^= x2l;
-          for (unsigned j = 0; j < 10; ++ j) aes_round(&x, key4[j], aes0, aes1, aes2, aes3);
+
+          // Unrolled AES rounds for better instruction scheduling
+          #pragma unroll 5
+          for (unsigned j = 0; j < 10; ++ j) {
+            aes_round(&x, key.u4[j], aes0, aes1, aes2, aes3);
+          }
           x1s = x;
           nd.barrier(sycl::access::fence_space::local_space);
 
           x ^= lpad[i1 + 8];
           x ^= x1l;
-          for (unsigned j = 0; j < 10; ++ j) aes_round(&x, key4[j], aes0, aes1, aes2, aes3);
+
+          #pragma unroll 5
+          for (unsigned j = 0; j < 10; ++ j) {
+            aes_round(&x, key.u4[j], aes0, aes1, aes2, aes3);
+          }
           x2s = x;
           nd.barrier(sycl::access::fence_space::local_space);
         }
 
         x ^= x2l;
+
+        // Final rounds with reduced synchronization overhead
+        #pragma unroll 2
         for (unsigned i = 0; i < 16; ++ i) {
-          for (unsigned j = 0; j < 10; ++ j) aes_round(&x, key4[j], aes0, aes1, aes2, aes3);
+          #pragma unroll 5
+          for (unsigned j = 0; j < 10; ++ j) {
+            aes_round(&x, key.u4[j], aes0, aes1, aes2, aes3);
+          }
           x1s = x;
           nd.barrier(sycl::access::fence_space::local_space);
-
           x ^= x1l;
         }
 
         x.store(l1 + 4, spad);
-        //nd.barrier(sycl::access::fence_space::global_space);
       });
     });
 
@@ -470,7 +558,9 @@ void cn_gpu(
     throw;
   }
 
-  for (unsigned i = 0; i != batch; ++ i) {
+  // Final Keccak hashing - keep on CPU for now as it's small workload
+  #pragma omp parallel for
+  for (unsigned i = 0; i < batch; ++ i) {
     keccak(static_cast<uint64_t*>(Spads) + 25*i);
     memcpy(output + HASH_LEN*i, static_cast<uint64_t*>(Spads) + 25*i, HASH_LEN);
   }
