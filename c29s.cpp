@@ -6,6 +6,7 @@
 #include <sycl/sycl.hpp>
 #include <algorithm>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 #include "sycl-lib-internal.h"
 #include "consts.h"
@@ -34,134 +35,127 @@ const constexpr uint32_t BUCKET_STEP            = 32;
 // Graph edge representation
 struct GraphEdge { uint32_t u, v; };
 
-// Cycle finder graph structure maintaining C# compatibility
-struct CycleGraph {
-  std::unordered_map<uint32_t, uint32_t> graph_u, graph_v;
-  int* edges;
-  int max_path_length, edge_count, duplicate_count;
+// Helper function to create path through graph
+static std::vector<uint32_t> create_path(
+    const std::unordered_map<uint32_t, uint32_t>& graph_u,
+    const std::unordered_map<uint32_t, uint32_t>& graph_v,
+    bool start_in_u, uint32_t start_node, const uint32_t max_path_length = 8192) {
 
-  CycleGraph() : edges(new int[400000]), max_path_length(8192), edge_count(0), duplicate_count(0) {}
-  ~CycleGraph() { delete[] edges; }
-};
-
-// Create path through graph following original C# logic
-std::vector<uint32_t> create_graph_path(CycleGraph* const graph, bool start_in_graph_u, uint32_t start_node) {
   std::vector<uint32_t> path;
-  std::unordered_map<uint32_t, uint32_t>* current_graph = start_in_graph_u ? &graph->graph_u : &graph->graph_v;
-
+  path.reserve(64); // Reserve reasonable initial capacity
   path.push_back(start_node);
 
-  auto iterator = current_graph->find(start_node);
-  while (iterator != current_graph->end() && path.size() < static_cast<uint32_t>(graph->max_path_length)) {
-    const uint32_t next_node = iterator->second;
+  const std::unordered_map<uint32_t, uint32_t>* current_graph = start_in_u ? &graph_u : &graph_v;
+
+  auto it = current_graph->find(start_node);
+  while (it != current_graph->end() && path.size() < max_path_length) {
+    const uint32_t next_node = it->second;
     path.push_back(next_node);
 
-    start_in_graph_u = !start_in_graph_u;
-    current_graph    = start_in_graph_u ? &graph->graph_u : &graph->graph_v;
-    start_node       = next_node;
-    iterator         = current_graph->find(start_node);
+    start_in_u = !start_in_u;
+    current_graph = start_in_u ? &graph_u : &graph_v;
+    it = current_graph->find(next_node);
   }
 
   return path;
 }
 
-// Reverse path in graph following original C# logic
-void reverse_graph_path(CycleGraph* const graph, const std::vector<uint32_t>& path, const bool starts_in_u) {
-  for (int i = static_cast<int>(path.size()) - 2; i >= 0; i--) {
-    const uint32_t node_a = path[static_cast<uint32_t>(i)];
-    const uint32_t node_b = path[static_cast<uint32_t>(i) + 1];
+// Helper function to reverse path in graph - optimized with fewer branches
+static void reverse_path(
+    std::unordered_map<uint32_t, uint32_t>& graph_u,
+    std::unordered_map<uint32_t, uint32_t>& graph_v,
+    const std::vector<uint32_t>& path, bool starts_in_u) {
 
-    if (starts_in_u) {
-      if ((i & 1) == 0) {
-        graph->graph_u.erase(node_a);
-        graph->graph_v[node_b] = node_a;
-      } else {
-        graph->graph_v.erase(node_a);
-        graph->graph_u[node_b] = node_a;
-      }
-    } else {
-      if ((i & 1) == 0) {
-        graph->graph_v.erase(node_a);
-        graph->graph_u[node_b] = node_a;
-      } else {
-        graph->graph_u.erase(node_a);
-        graph->graph_v[node_b] = node_a;
-      }
-    }
+  // Use pointers to avoid repeated branching
+  std::unordered_map<uint32_t, uint32_t>* graphs[2] = {&graph_u, &graph_v};
+
+  for (int i = static_cast<int>(path.size()) - 2; i >= 0; i--) {
+    const uint32_t node_a = path[i];
+    const uint32_t node_b = path[i + 1];
+
+    const int idx_remove = (starts_in_u ? (i & 1) : !(i & 1)) ? 1 : 0;
+    const int idx_add = 1 - idx_remove;
+
+    graphs[idx_remove]->erase(node_a);
+    (*graphs[idx_add])[node_b] = node_a;
   }
 }
 
-// Initialize graph with edge data following original C# logic
-void initialize_graph_edges(CycleGraph* const graph, int* const edge_data, const int count) {
-  graph->edge_count = count;
-  std::memcpy(graph->edges, edge_data, static_cast<uint32_t>(count) * 2 * sizeof(int));
-  graph->graph_u.clear();
-  graph->graph_v.clear();
-  graph->duplicate_count = 0;
-}
+// Main function to find cycles in graph - optimized version
+std::vector<std::vector<GraphEdge>> find_cycles(
+    const std::vector<uint32_t>& trimmed_edges,
+    const int target_cycle_length = C29_CYCLE_LEN) {
 
-// Find cycles in graph following original C# algorithm exactly
-std::vector<std::vector<GraphEdge>> find_graph_cycles(CycleGraph* const graph, const int target_cycle_length = C29_CYCLE_LEN) {
+  const uint32_t edge_count = trimmed_edges.size() / 2;
+
+  // Pre-allocate hash maps with expected size to reduce rehashing
+  std::unordered_map<uint32_t, uint32_t> graph_u;
+  std::unordered_map<uint32_t, uint32_t> graph_v;
+  graph_u.reserve(edge_count);
+  graph_v.reserve(edge_count);
+
   std::vector<std::vector<GraphEdge>> solutions;
+  solutions.reserve(4); // Most graphs have few solutions
 
-  for (int edge_index = 0; edge_index < graph->edge_count; edge_index++) {
-    const uint32_t node_u = static_cast<uint32_t>(graph->edges[edge_index * 2 + 0]);
-    const uint32_t node_v = static_cast<uint32_t>(graph->edges[edge_index * 2 + 1]);
+  // Process edges directly from the input vector
+  for (uint32_t edge_idx = 0; edge_idx < edge_count; edge_idx++) {
+    const uint32_t node_u = trimmed_edges[edge_idx * 2];
+    const uint32_t node_v = trimmed_edges[edge_idx * 2 + 1];
 
-    // Check for duplicate edges following original logic
-    const auto iter_u = graph->graph_u.find(node_u);
-    if (iter_u != graph->graph_u.end() && iter_u->second == node_v) {
-      graph->duplicate_count++;
-      continue;
-    }
+    // Check for duplicate edges - use find result directly
+    auto it_u = graph_u.find(node_u);
+    if (it_u != graph_u.end() && it_u->second == node_v) continue;
 
-    const auto iter_v = graph->graph_v.find(node_v);
-    if (iter_v != graph->graph_v.end() && iter_v->second == node_u) {
-      graph->duplicate_count++;
-      continue;
-    }
+    auto it_v = graph_v.find(node_v);
+    if (it_v != graph_v.end() && it_v->second == node_u) continue;
 
     // Create paths from both endpoints
-    const std::vector<uint32_t> path_from_u = create_graph_path(graph, true, node_u);
-    const std::vector<uint32_t> path_from_v = create_graph_path(graph, false, node_v);
+    std::vector<uint32_t> path_from_u = create_path(graph_u, graph_v, true, node_u);
+    std::vector<uint32_t> path_from_v = create_path(graph_u, graph_v, false, node_v);
 
-    int64_t join_index_a = -1, join_index_b = -1;
+    // Find intersection point - use simple O(n*m) algorithm like original
+    int64_t join_a = -1, join_b = -1;
 
-    // Find intersection point of the two paths
-    for (uint32_t i = 0; i < path_from_u.size(); i++) {
+    // Early termination on first match, like original
+    for (uint32_t i = 0; i < path_from_u.size() && join_a == -1; i++) {
       const uint32_t current_node = path_from_u[i];
-      const auto intersection = std::find(path_from_v.begin(), path_from_v.end(), current_node);
-      if (intersection != path_from_v.end()) {
-        join_index_a = static_cast<int64_t>(i);
-        join_index_b = intersection - path_from_v.begin();
-        break;
+
+      // Use std::find which is often optimized with SIMD
+      auto it = std::find(path_from_v.begin(), path_from_v.end(), current_node);
+      if (it != path_from_v.end()) {
+        join_a = i;
+        join_b = it - path_from_v.begin();
+        break; // Early termination like original
       }
     }
 
-    const int64_t cycle_length = join_index_a != -1 ? 1 + join_index_a + join_index_b : 0;
+    const int64_t cycle_length = join_a != -1 ? 1 + join_a + join_b : 0;
 
     if (cycle_length == target_cycle_length) {
-      // Construct cycle edges following original logic
+      // Found a cycle - construct edge list
       std::vector<GraphEdge> cycle_edges;
+      cycle_edges.reserve(target_cycle_length);
       cycle_edges.push_back({node_u, node_v});
 
       // Add edges from first path
-      for (int64_t i = 0; i < join_index_a; i++)
-        cycle_edges.push_back({path_from_u[static_cast<uint32_t>(i) + 1], path_from_u[static_cast<uint32_t>(i)]});
+      for (int64_t i = 0; i < join_a; i++) {
+        cycle_edges.push_back({path_from_u[i + 1], path_from_u[i]});
+      }
 
       // Add edges from second path
-      for (int64_t i = 0; i < join_index_b; i++)
-        cycle_edges.push_back({path_from_v[static_cast<uint32_t>(i) + 1], path_from_v[static_cast<uint32_t>(i)]});
+      for (int64_t i = 0; i < join_b; i++) {
+        cycle_edges.push_back({path_from_v[i + 1], path_from_v[i]});
+      }
 
-      solutions.push_back(cycle_edges);
+      solutions.push_back(std::move(cycle_edges));
     } else {
-      // Update graph structure following original logic
+      // Update graph structure
       if (path_from_u.size() > path_from_v.size()) {
-        reverse_graph_path(graph, path_from_v, false);
-        graph->graph_v[node_v] = node_u;
+        reverse_path(graph_u, graph_v, path_from_v, false);
+        graph_v[node_v] = node_u;
       } else {
-        reverse_graph_path(graph, path_from_u, true);
-        graph->graph_u[node_u] = node_v;
+        reverse_path(graph_u, graph_v, path_from_u, true);
+        graph_u[node_u] = node_v;
       }
     }
   }
@@ -631,22 +625,13 @@ std::vector<uint32_t> c29s_gpu_sol_nonces(const uint64_t seed_k0, const uint64_t
 
   if (trimmed_edge_count > MAX_TRIMMED_EDGE_COUNT) return std::vector<uint32_t>();
 
-  std::vector<uint32_t> trimmed_edges(trimmed_edge_count* 2);
+  std::vector<uint32_t> trimmed_edges(trimmed_edge_count * 2);
   { sycl::host_accessor host_accessor{buffer_a1, sycl::read_only};
     std::copy(host_accessor.get_pointer(), host_accessor.get_pointer() + trimmed_edge_count * 2, trimmed_edges.begin());
   }
 
-  // Initialize cycle finding graph
-  CycleGraph* const graph = new CycleGraph();
-  std::vector<int> edge_ints(trimmed_edges.size());
-  for (uint32_t i = 0; i < trimmed_edges.size(); i++) edge_ints[i] = static_cast<int>(trimmed_edges[i]);
-
-  initialize_graph_edges(graph, edge_ints.data(), trimmed_edge_count);
-
   // Find 32-cycles in trimmed graph
-  const std::vector<std::vector<GraphEdge> > solutions = find_graph_cycles(graph, C29_CYCLE_LEN);
-
-  delete graph; // Clean up graph memory
+  const std::vector<std::vector<GraphEdge>> solutions = find_cycles(trimmed_edges, C29_CYCLE_LEN);
 
   std::vector<uint32_t> results;
   results.reserve(solutions.size() * C29_CYCLE_LEN);
