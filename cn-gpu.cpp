@@ -383,7 +383,7 @@ void cn_gpu(
 
       h.use_kernel_bundle(kb);
       h.parallel_for(sycl::nd_range(sycl::range(batch * WORKGROUP_SIZE),
-                                   sycl::range(WORKGROUP_SIZE)),
+                                    sycl::range(WORKGROUP_SIZE)),
                      [=](sycl::nd_item<1> nd) {
         const unsigned l = nd.get_local_id(), ld  = l / 4, lm  = l % 4, b = ld * 16 + lm;
 

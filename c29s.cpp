@@ -22,7 +22,7 @@ const constexpr uint64_t INDEX_SIZE     = 256 * 256 * 4;
 // Algorithm parameters
 const constexpr uint32_t COMPUTE_THREADS        = 1024;
 const constexpr uint32_t TRIMMING_ROUNDS        = 80;
-const constexpr uint32_t MAX_TRIMMED_EDGE_COUNT = 200000;
+const constexpr uint32_t MAX_TRIMMED_EDGE_COUNT = 128 * COMPUTE_THREADS;
 const constexpr uint32_t EDGE_BLOCK_SIZE        = 64;
 const constexpr uint32_t EDGE_BLOCK_MASK        = EDGE_BLOCK_SIZE - 1;
 const constexpr uint32_t EDGE_BITS              = 29;
@@ -31,9 +31,6 @@ const constexpr uint32_t EDGE_MASK              = NUM_EDGES - 1;
 const constexpr uint32_t BUCKET_MASK_4K         = 4096 - 1;
 const constexpr uint32_t BUCKET_OFFSET          = 255;
 const constexpr uint32_t BUCKET_STEP            = 32;
-
-// Graph edge representation
-struct GraphEdge { uint32_t u, v; };
 
 // Helper function to create path through graph
 static std::vector<uint32_t> create_path(
@@ -82,11 +79,11 @@ static void reverse_path(
 }
 
 // Main function to find cycles in graph - optimized version
-std::vector<std::vector<GraphEdge>> find_cycles(
-    const std::vector<uint32_t>& trimmed_edges,
+std::vector<std::vector<sycl::uint2>> find_cycles(
+    const std::vector<sycl::uint2>& trimmed_edges,
     const int target_cycle_length = C29_CYCLE_LEN) {
 
-  const uint32_t edge_count = trimmed_edges.size() / 2;
+  const uint32_t edge_count = trimmed_edges.size();
 
   // Pre-allocate hash maps with expected size to reduce rehashing
   std::unordered_map<uint32_t, uint32_t> graph_u;
@@ -94,13 +91,13 @@ std::vector<std::vector<GraphEdge>> find_cycles(
   graph_u.reserve(edge_count);
   graph_v.reserve(edge_count);
 
-  std::vector<std::vector<GraphEdge>> solutions;
+  std::vector<std::vector<sycl::uint2>> solutions;
   solutions.reserve(4); // Most graphs have few solutions
 
   // Process edges directly from the input vector
   for (uint32_t edge_idx = 0; edge_idx < edge_count; edge_idx++) {
-    const uint32_t node_u = trimmed_edges[edge_idx * 2];
-    const uint32_t node_v = trimmed_edges[edge_idx * 2 + 1];
+    const uint32_t node_u = trimmed_edges[edge_idx].x();
+    const uint32_t node_v = trimmed_edges[edge_idx].y();
 
     // Check for duplicate edges - use find result directly
     auto it_u = graph_u.find(node_u);
@@ -133,7 +130,7 @@ std::vector<std::vector<GraphEdge>> find_cycles(
 
     if (cycle_length == target_cycle_length) {
       // Found a cycle - construct edge list
-      std::vector<GraphEdge> cycle_edges;
+      std::vector<sycl::uint2> cycle_edges;
       cycle_edges.reserve(target_cycle_length);
       cycle_edges.push_back({node_u, node_v});
 
@@ -575,9 +572,8 @@ std::vector<uint32_t> c29s_gpu_sol_nonces(const uint64_t seed_k0, const uint64_t
     });
   };
 
-  trim_round_with_offset(compute_queue, buffer_a1_u2, buffer_b_u2, buffer_i2, buffer_i1);
-
   // Main trimming loop: iteratively reduce edge count by removing low-degree edges
+  trim_round_with_offset(compute_queue, buffer_a1_u2, buffer_b_u2, buffer_i2, buffer_i1);
   for (uint32_t round_index = 0; round_index < TRIMMING_ROUNDS; round_index++) {
     zero_buffer(buffer_i2);
     trim_round_with_offset(compute_queue, buffer_b_u2, buffer_a1_u2, buffer_i1, buffer_i2);
@@ -585,14 +581,15 @@ std::vector<uint32_t> c29s_gpu_sol_nonces(const uint64_t seed_k0, const uint64_t
     trim_round_with_offset(compute_queue, buffer_a1_u2, buffer_b_u2, buffer_i2, buffer_i1);
   }
 
-  zero_buffer(buffer_i2);
-
   // FluffyTailO: Collect final edges into contiguous output buffer
+  uint32_t trimmed_edge_count = 0;
+  sycl::buffer<uint32_t, 1> buffer_trimmed_edge_count{&trimmed_edge_count, sycl::range(1)};
+  sycl::buffer<sycl::uint2, 1> buffer_trimmed_edges_u2{sycl::range(MAX_TRIMMED_EDGE_COUNT)};
   compute_queue.submit([&](sycl::handler& handler) {
     sycl::accessor acc_b{buffer_b_u2, handler, sycl::read_only};
-    sycl::accessor acc_a1{buffer_a1_u2, handler, sycl::write_only, sycl::no_init};
+    sycl::accessor acc_edges{buffer_trimmed_edges_u2, handler, sycl::write_only, sycl::no_init};
     sycl::accessor acc_i1{buffer_i1, handler, sycl::read_only};
-    sycl::accessor acc_i2{buffer_i2, handler, sycl::read_write};
+    sycl::accessor acc_trimmed_edge_count{buffer_trimmed_edge_count, handler, sycl::read_write};
 
     const constexpr uint32_t BUCKET_OFFSET = 255;
     const constexpr uint32_t BUCKET_STEP   = 32;
@@ -607,31 +604,30 @@ std::vector<uint32_t> c29s_gpu_sol_nonces(const uint64_t seed_k0, const uint64_t
       const uint32_t edges_to_copy = acc_i1[work_group_id];
 
       // Thread 0 reserves space in output buffer
-      if (local_id == 0) output_index[0] = global_atomic_ref(acc_i2[0]).fetch_add(edges_to_copy);
+      if (local_id == 0) output_index[0] = global_atomic_ref(acc_trimmed_edge_count[0]).fetch_add(edges_to_copy);
       item.barrier(sycl::access::fence_space::local_space);
 
       // Copy edges to contiguous output buffer
-      if (local_id < edges_to_copy)
-        acc_a1[output_index[0] + local_id] = acc_b[((work_group_id & BUCKET_OFFSET) * BUCKET_STEP) +
-                                                    work_group_id * duck_edges_b + local_id];
+      if (local_id < edges_to_copy) {
+        const uint32_t index = output_index[0] + local_id;
+	if (index < MAX_TRIMMED_EDGE_COUNT)
+          acc_edges[index] = acc_b[((work_group_id & BUCKET_OFFSET) * BUCKET_STEP) + work_group_id * duck_edges_b + local_id];
+       }
     });
   });
 
   // Read final results from GPU memory
-  uint32_t trimmed_edge_count;
-  { sycl::host_accessor host_accessor{buffer_i2, sycl::read_only};
-    trimmed_edge_count = host_accessor[0];
+  { sycl::host_accessor host_accessor{buffer_trimmed_edge_count, sycl::read_only};
+    trimmed_edge_count = std::min(host_accessor[0], MAX_TRIMMED_EDGE_COUNT);
   }
 
-  if (trimmed_edge_count > MAX_TRIMMED_EDGE_COUNT) return std::vector<uint32_t>();
-
-  std::vector<uint32_t> trimmed_edges(trimmed_edge_count * 2);
-  { sycl::host_accessor host_accessor{buffer_a1, sycl::read_only};
-    std::copy(host_accessor.get_pointer(), host_accessor.get_pointer() + trimmed_edge_count * 2, trimmed_edges.begin());
+  std::vector<sycl::uint2> trimmed_edges(trimmed_edge_count);
+  { auto host_accessor = buffer_trimmed_edges_u2.get_host_access(sycl::range<1>(trimmed_edge_count), sycl::id<1>(0));
+    std::memcpy(trimmed_edges.data(), host_accessor.get_pointer(), trimmed_edge_count * sizeof(sycl::uint2));
   }
 
   // Find 32-cycles in trimmed graph
-  const std::vector<std::vector<GraphEdge>> solutions = find_cycles(trimmed_edges, C29_CYCLE_LEN);
+  const std::vector<std::vector<sycl::uint2>> solutions = find_cycles(trimmed_edges, C29_CYCLE_LEN);
 
   std::vector<uint32_t> results;
   results.reserve(solutions.size() * C29_CYCLE_LEN);
@@ -641,7 +637,7 @@ std::vector<uint32_t> c29s_gpu_sol_nonces(const uint64_t seed_k0, const uint64_t
     // Convert cycle edges to 64-bit format for recovery kernel
     std::vector<uint64_t> recovery_edges(C29_CYCLE_LEN, 0);
     for (uint32_t i = 0; i < solutions[sol_idx].size() && i < C29_CYCLE_LEN; i++) {
-      const uint32_t u = solutions[sol_idx][i].u, v = solutions[sol_idx][i].v;
+      const uint32_t u = solutions[sol_idx][i].x(), v = solutions[sol_idx][i].y();
       recovery_edges[i] = u | (static_cast<uint64_t>(v) << 32);
     }
 
