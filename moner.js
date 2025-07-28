@@ -132,13 +132,14 @@ function messageHandler(msg) {
       break;
 
     case "test":
-      // duplicate test result for batch size
-      let result_hash_hex = test.result_hash_hex;
-      // for rx algos threads are encoded in batch
       const is_rx = global.opt.job.algo.includes("rx/");
       const batch = h.get_dev_batch(h.get_thread_dev(msg.thread_id, global.opt.job.dev));
-      const rx_batch = is_rx ? 1 : batch;
-      for (let i = 1; i < rx_batch; ++ i) result_hash_hex += " " + test.result_hash_hex;
+      let result_hash_hex = test.result_hash_hex;
+      // duplicate test result for batch size if test.result_hash_hex does not already dublicated (contain spaces)
+      if (!result_hash_hex.includes(" ")) {
+        const rx_batch = is_rx ? 1 : batch; // for rx algos threads are encoded in batch
+        for (let i = 1; i < rx_batch; ++ i) result_hash_hex += " " + test.result_hash_hex;
+      }
       if (msg.value.result !== result_hash_hex) {
         h.log_err("FAILED: " + msg.value.result + " != " + result_hash_hex + " in " +
                 msg.thread_id + " thread");

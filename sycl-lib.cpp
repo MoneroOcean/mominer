@@ -109,23 +109,27 @@ std::map<std::string, std::string> algo_params(
         // CPU and explicit GPU platforms are not used by default
         if (dev_str.starts_with("cpu") || dev_str.ends_with("o") || dev_str.ends_with("z"))
           continue;
-        const sycl::device& dev = dev_pair.second;
-        const unsigned max_compute_units = dev.get_info<sycl::info::device::max_compute_units>();
-        if (algo2mem.contains(algo)) {
-          const unsigned batch_mem        = algo2mem.at(algo),
-                         max_alloc_batch  = (dev.get_info<sycl::info::device::max_mem_alloc_size>()
-                                            / batch_mem) & 0xFFFFFFF8,
-                         max_batch        = dev.get_info<sycl::info::device::global_mem_size>()
-                                            / batch_mem,
-                         max_thread_batch = std::min(max_alloc_batch, max_batch),
-                         best_batch       = std::min(max_compute_units * 6, max_batch);
-          unsigned used_batch = 0;
-          while (used_batch < best_batch) {
-            const unsigned current_batch = std::min(best_batch - used_batch, max_thread_batch);
-            add_result_dev(dev_str + "*" + std::to_string(current_batch));
-            used_batch += current_batch;
-          }
-        } else add_result_dev(dev_str + "*" + std::to_string(max_compute_units));
+	if (algo == "c29s") {
+	  add_result_dev(dev_str + "*8"); // batch 8 here means number of potential solutions to return (usually it is 1 solution only)
+	} else {
+          const sycl::device& dev = dev_pair.second;
+          const unsigned max_compute_units = dev.get_info<sycl::info::device::max_compute_units>();
+          if (algo2mem.contains(algo)) {
+            const unsigned batch_mem        = algo2mem.at(algo),
+                           max_alloc_batch  = (dev.get_info<sycl::info::device::max_mem_alloc_size>()
+                                              / batch_mem) & 0xFFFFFFF8,
+                           max_batch        = dev.get_info<sycl::info::device::global_mem_size>()
+                                              / batch_mem,
+                           max_thread_batch = std::min(max_alloc_batch, max_batch),
+                           best_batch       = std::min(max_compute_units * 6, max_batch);
+            unsigned used_batch = 0;
+            while (used_batch < best_batch) {
+              const unsigned current_batch = std::min(best_batch - used_batch, max_thread_batch);
+              add_result_dev(dev_str + "*" + std::to_string(current_batch));
+              used_batch += current_batch;
+            }
+          } else add_result_dev(dev_str + "*" + std::to_string(max_compute_units));
+	}
       }
     }
     result[algo] = result_dev;

@@ -70,12 +70,14 @@ static const xmrig::CnHash::AlgoVariant cpu_params2variant[MAX_CN_CPU_WAYS][2] =
 };
 
 static const std::map<std::string, cn_gpu_hash_fun> gpu_algo2fn = {
-  { "cn/gpu", cn_gpu }
+  { "cn/gpu", cn_gpu  },
+  { "c29s",   c29s    }
 };
 
 static const std::map<std::string, unsigned> algo2mem = [](){
   std::map<std::string, unsigned> result = {
-    { "cn/gpu", 2*1024*1024 }
+    { "cn/gpu", 2*1024*1024 }, // host memory is not really used (number used only for algo_params calcs)
+    { "c29s",   0 }            // host memory is not used even for algo_params calcs
   };
   for (const auto& i : cpu_name2algo) result[i.first] = xmrig::Algorithm(i.second).l3();
   return result;
@@ -154,7 +156,7 @@ void Core::set_job(
   const unsigned new_batch = batch_parts.size() == 2 ? atoi(batch_parts[1].c_str()) : 1;
   const DEV new_dev = new_dev_str2 == "cpu" ?
                       (new_algo_str.starts_with("rx/") ? DEV::RX_CPU : DEV::CPU) :
-                      DEV::GPU;
+                      (new_algo_str.starts_with("c29") ? DEV::C29_GPU : DEV::GPU);
 
   FN new_fn;
   unsigned new_nonce_offset;
@@ -193,11 +195,12 @@ void Core::set_job(
       break;
     }
 
-    case DEV::GPU: {
+    case DEV::GPU:
+    case DEV::C29_GPU: {
       const auto pi = gpu_algo2fn.find(new_algo_str);
       if (pi == gpu_algo2fn.end()) throw std::string("Unsupported algo");
       new_fn.gpu = pi->second;
-      new_nonce_offset = 39;
+      new_nonce_offset = new_dev == DEV::GPU ? 39 : (new_input_hex.size() >> 1) - 4;
       break;
     }
   }
@@ -275,7 +278,7 @@ void Core::set_job(
     } else { // setup cn stuff
       if (m_input == nullptr) m_input = static_cast<uint8_t*>(alloc_mem(new_batch * MAX_BLOB_LEN));
       if (m_output == nullptr) m_output = static_cast<uint8_t*>(alloc_mem(new_batch * HASH_LEN));
-      if (m_spads == nullptr) m_spads = alloc_mem(new_batch * 200);
+      if (m_spads == nullptr) m_spads = alloc_mem(new_batch * SPAD_LEN);
       if (m_ctx == nullptr) {
         m_ctx = new cryptonight_ctx*[new_batch];
         xmrig::CnCtx::create(m_ctx, m_lpads->scratchpad(), new_mem_size, new_batch);

@@ -128,6 +128,7 @@
     "type": "static_library",
     "sources": [
       "sycl-lib.cpp",
+      "c29s.cpp",
       "cn-gpu.cpp",
     ],
     "cflags!": [ "-O3" ],

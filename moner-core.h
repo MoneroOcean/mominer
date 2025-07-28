@@ -12,7 +12,7 @@
 typedef void (*cn_any_hash_fun)();
 typedef void (*cn_gpu_hash_fun)(
   const uint8_t* input, unsigned input_size, uint8_t* output,
-  void* Lpads, void* Spads, unsigned batch, const std::string& dev_str
+  void* Lpads, void* Spads, unsigned* pbatch, const std::string& dev_str
 );
 static_assert(
   sizeof(cn_any_hash_fun) == sizeof(xmrig::cn_hash_fun) &&
@@ -24,7 +24,7 @@ union FN {
   xmrig::cn_hash_fun cpu;
   cn_gpu_hash_fun    gpu;
 };
-enum DEV { CPU, RX_CPU, GPU };
+enum DEV { CPU, RX_CPU, GPU, C29_GPU };
 
 class Core: public AsyncWorker {
   const unsigned HASHRATE_COUNTER_INTERVAL = 10; // iterations to skip to update/check hashrate
@@ -53,6 +53,7 @@ class Core: public AsyncWorker {
   inline uint32_t* get_nonce(const unsigned batch) {
     return get_nonce(m_input, batch);
   }
+  // just check the most significant uint64_t value of the full 32-byte hash value
   inline const uint64_t* get_result(const uint8_t* const output, const unsigned batch = 0) const {
     return reinterpret_cast<const uint64_t*>(output + (batch * HASH_LEN) + 24);
   }
@@ -68,8 +69,8 @@ class Core: public AsyncWorker {
     const std::string& value = std::string()
   );
   void send_error(const std::string& str);
-  void send_result(const uint32_t nonce, const uint8_t* const output);
-  void send_last_nonce(const uint32_t nonce, const std::string& pool_id);
+  void send_result(uint32_t nonce, const uint8_t* output, const uint32_t* edges = nullptr);
+  void send_last_nonce(uint32_t nonce, const std::string& pool_id);
   void free_memory(
     const bool is_batch_changed    = true,
     const bool is_mem_size_changed = true,

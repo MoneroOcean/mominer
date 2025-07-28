@@ -14,5 +14,10 @@ std::map<std::string, std::string> algo_params(
 
 void cn_gpu(
   const uint8_t* inputs, unsigned input_size, uint8_t* output,
-  void* Lpads, void* Spads, unsigned batch, const std::string& dev_str
+  void*, void* Spads, unsigned* pbatch, const std::string& dev_str
+);
+
+void c29s(
+  const uint8_t* inputs, uint32_t input_size, uint8_t* output,
+  void*, void* output_edges, uint32_t* pbatch, const std::string& dev_str
 );

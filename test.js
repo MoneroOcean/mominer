@@ -6,7 +6,7 @@ const child_process = require("child_process");
 
 function test(job, result, cb) {
   if (!("dev" in job)) job.dev = "cpu";
-  const cmd = "node moner.js test " + job.algo + " " + result + " --job '" +
+  const cmd = "node moner.js test " + job.algo + " '" + result + "' --job '" +
               JSON.stringify(job) + "'";
 
   let output = "";
@@ -51,7 +51,7 @@ function test(job, result, cb) {
 }
 
 function test_gpu(job, result, cb) {
-  job.dev = "gpu1*8";
+  if (!("dev" in job)) job.dev = "gpu1*8";
   test(job, result, cb);
 }
 
@@ -124,6 +124,8 @@ let tests = [
     "fe53352076eae689fa3b4fda614634cfc312ee0c387df2b8b74da2a159741235"
   ], [ test_gpu, { algo: "cn/gpu" },
     "e55cb23e51649a59b127b96b515f2bf7bfea199741a0216cf838ded06eff82df"
+  ], [ test_gpu, { algo: "c29s", dev: "gpu1*2", blob_hex: "0001000000000000202e000000005c2e43ce014ca55dc4e0dffe987ee3eef9ca78e517f5ae7383c40797a4e8a9dd75ddf57eafac5471135202aa6054a2cc66aa5510ebdd58edcda0662a9e02d8232a4c90e90b7bddec1f32031d2894d76e3c390fc12b2dcc7a6f12b52be1d7aea70eac7b8ae0dc3f0ffb267e39b95a77e44e66d523399312a812d538afd00c7fd87275f4be7ef2f447ca918435d537c3db3c1d3e5d4f3b830432e5a283fab48917a5695324a319860a329cb1f6d1520ad0078c0f1dd9147f347f4c34e26d3063f117858d75000000000000babd0000000000007f23000000001ac67b3b0000015545f385f2" },
+    "ca1415eff60a4261fe28aacf4128b7e8e9708fc9d75bdac4ad2442612d40899f f852de4ae0f8e279020d61466926f6e138b1bf7f28060d7a9f8029e6f3073a79"
   ],
 ];
 

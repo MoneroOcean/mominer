@@ -113,12 +113,17 @@ void Core::send_error(const std::string& str) {
   send_msg("error", "message", str);
 }
 
-void Core::send_result(const uint32_t nonce, const uint8_t* const output) {
+void Core::send_result(const uint32_t nonce, const uint8_t* const output, const uint32_t* const edges) {
   MessageValues values;
-  char nonce_hex[sizeof(uint32_t)*2+1], hash_hex[HASH_LEN*2+1];
+  char nonce_hex[sizeof(uint32_t)*2+1], hash_hex[HASH_LEN*2+1], edges_hex[C29_CYCLE_LEN*sizeof(uint32_t)*2+1];
   snprintf(nonce_hex, sizeof(uint32_t)*2+1, "%08x", __builtin_bswap32(nonce));
   values["nonce"]     = nonce_hex;
   values["hash"]      = hash_bin2hex(output, hash_hex);
+  if (edges) {
+    for (int i = 0; i < C29_CYCLE_LEN; ++i) snprintf(edges_hex + i * sizeof(uint32_t)*2, sizeof(uint32_t)*2+1, "%08x", edges[i]);
+    edges_hex[C29_CYCLE_LEN * 8] = 0;
+    values["edges"]   = edges_hex;
+  }
   values["pool_id"]   = m_pool_id;
   values["worker_id"] = m_worker_id;
   values["job_id"]    = m_job_id;
@@ -374,6 +379,7 @@ void Core::Execute(const AsyncProgressQueueWorker<char>::ExecutionProgress& prog
     }
 
     if (m_fn.any) {
+      unsigned output_len = m_batch;
       try {
         switch (m_dev) {
           case DEV::CPU:
@@ -381,8 +387,9 @@ void Core::Execute(const AsyncProgressQueueWorker<char>::ExecutionProgress& prog
             break;
 
           case DEV::GPU:
-            m_fn.gpu(m_input, m_input_len, m_output, m_lpads->scratchpad(), m_spads,
-                     m_batch, m_dev_str);
+          case DEV::C29_GPU:
+            m_fn.gpu(m_input, m_input_len, m_output, nullptr, m_spads,
+                     &output_len, m_dev_str);
             break;
 
           case DEV::RX_CPU: throw "Internal error: Unreachable code executed";
@@ -399,7 +406,7 @@ void Core::Execute(const AsyncProgressQueueWorker<char>::ExecutionProgress& prog
 
       if (!m_nonce) { // test job
         std::string result_hash_str;
-        for (unsigned i = 0; i != m_batch; ++ i) {
+        for (unsigned i = 0; i != output_len; ++ i) {
           if (i) result_hash_str += " ";
           char hash[HASH_LEN*2+1];
           result_hash_str += hash_bin2hex(hash, i);
@@ -409,12 +416,17 @@ void Core::Execute(const AsyncProgressQueueWorker<char>::ExecutionProgress& prog
         continue;
       }
 
-      m_hash_count += m_batch; // here we do not need mutex since there are no threads
+      m_hash_count += m_dev == DEV::C29_GPU ? 1 : m_batch; // here we do not need mutex since there are no threads
 
       const uint32_t prev_nonce = m_nonce;
-      for (unsigned i = 0; i != m_batch; ++i) {
+      for (unsigned i = 0; i != output_len; ++i) {
         uint32_t* const pnonce = get_nonce(i);
-        if (m_target && *get_result(i) < m_target) send_result(*pnonce, m_output + HASH_LEN * i);
+        if (m_target && *get_result(i) < m_target)
+	  send_result(
+	    *pnonce, m_output + HASH_LEN * i,
+	    // for C29 algo we pass solution grapg edges via m_spads
+	    m_dev == DEV::C29_GPU ? static_cast<uint32_t*>(m_spads) + SPAD_LEN * i : nullptr
+          );
         *pnonce = m_nonce;
         m_nonce += m_nonce_step;
       }
