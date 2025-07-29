@@ -328,7 +328,7 @@ void cn_gpu(
     // Kernel 1: Initial Keccak hashing
     q.submit([&](sycl::handler& h) {
       const auto inputs = bInputs.get_access<sycl::access::mode::read>(h);
-      const auto spads  = bSpads.get_access<sycl::access::mode::discard_write>(h);
+      const sycl::accessor spads{bSpads, h, sycl::write_only, sycl::no_init};
       h.use_kernel_bundle(kb);
 
       // Use optimal workgroup size for Xe-cores
@@ -351,7 +351,7 @@ void cn_gpu(
     // Kernel 2: Memory initialization
     q.submit([&](sycl::handler& h) {
       const auto spads = bSpads.get_access<sycl::access::mode::read>(h);
-      const auto lpads = bLpads.get_access<sycl::access::mode::discard_write>(h);
+      const sycl::accessor lpads{bLpads, h, sycl::write_only, sycl::no_init};
       const unsigned THREADS2 = CN_MEMORY8 / 64;
       h.use_kernel_bundle(kb);
 

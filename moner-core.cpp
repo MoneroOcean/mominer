@@ -120,7 +120,7 @@ void Core::send_result(const uint32_t nonce, const uint8_t* const output, const 
   values["nonce"]     = nonce_hex;
   values["hash"]      = hash_bin2hex(output, hash_hex);
   if (edges) {
-    for (int i = 0; i < C29_CYCLE_LEN; ++i) snprintf(edges_hex + i * sizeof(uint32_t)*2, sizeof(uint32_t)*2+1, "%08x", edges[i]);
+    for (unsigned i = 0; i < C29_CYCLE_LEN; ++i) snprintf(edges_hex + i * sizeof(uint32_t)*2, sizeof(uint32_t)*2+1, "%08x", edges[i]);
     edges_hex[C29_CYCLE_LEN * 8] = 0;
     values["edges"]   = edges_hex;
   }
@@ -150,7 +150,7 @@ void Core::free_memory(
     // ++ m_job_ref is to stop rx threads if any
     if (m_thread_pool) { ++ m_job_ref; delete m_thread_pool; m_thread_pool = nullptr; }
     if (m_vm) {
-      for (int i = 0; i != m_batch; ++ i) randomx_destroy_vm(m_vm[i]);
+      for (unsigned i = 0; i != m_batch; ++ i) randomx_destroy_vm(m_vm[i]);
       delete [] m_vm; m_vm = nullptr;
     }
   }
@@ -379,7 +379,7 @@ void Core::Execute(const AsyncProgressQueueWorker<char>::ExecutionProgress& prog
     }
 
     if (m_fn.any) {
-      unsigned output_len = m_batch;
+      uint32_t output_len = m_batch;
       try {
         switch (m_dev) {
           case DEV::CPU:
@@ -405,14 +405,18 @@ void Core::Execute(const AsyncProgressQueueWorker<char>::ExecutionProgress& prog
       }
 
       if (!m_nonce) { // test job
-        std::string result_hash_str;
-        for (unsigned i = 0; i != output_len; ++ i) {
-          if (i) result_hash_str += " ";
-          char hash[HASH_LEN*2+1];
-          result_hash_str += hash_bin2hex(hash, i);
-        }
-        send_msg("test", "result", result_hash_str);
-        set_fn(nullptr);
+	m_input_len = 0; // do not produce any more test jobs for async GPU code like in c29s
+	if (output_len != 0) {
+	  if (output_len == static_cast<uint32_t>(-1)) output_len = 0; // no more results are expected
+          std::string result_hash_str;
+          for (unsigned i = 0; i != output_len; ++ i) {
+            if (i) result_hash_str += " ";
+            char hash[HASH_LEN*2+1];
+           result_hash_str += hash_bin2hex(hash, i);
+           }
+          send_msg("test", "result", result_hash_str);
+          set_fn(nullptr);
+	}
         continue;
       }
 
