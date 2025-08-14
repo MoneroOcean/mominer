@@ -77,7 +77,6 @@ void keccak(uint64_t* const s) {
   };
 
   // Partial unroll for better instruction scheduling
-  #pragma unroll 2
   for (unsigned round = 0; round < 24; ++ round) {
     uint64_t bc[5];
 
@@ -101,7 +100,6 @@ void keccak(uint64_t* const s) {
 
     // Rho and Pi steps
     uint64_t t = s[1];
-    #pragma unroll 8
     for (unsigned i = 0; i < 24; ++ i) {
       bc[0] = s[piln[i]];
       s[piln[i]] = sycl::rotate(t, static_cast<uint64_t>(rotc[i]));
@@ -109,7 +107,6 @@ void keccak(uint64_t* const s) {
     }
 
     // Chi step - unrolled for Arc's SIMD width
-    #pragma unroll 5
     for (unsigned i = 0; i < 25; i += 5) {
       const uint64_t tmp1 = s[i], tmp2 = s[i + 1];
       s[i    ] = sycl::bitselect(s[i    ] ^ s[i + 2], s[i    ], s[i + 1]);
@@ -129,13 +126,11 @@ void generate512(const unsigned idx, const uint64_t* const in, uint64_t* out) {
   hash[0] = in[0] ^ idx;
 
   // Vectorized copy for better memory throughput
-  #pragma unroll 4
   for (unsigned i = 1; i < 25; ++ i) hash[i] = in[i];
 
   for (unsigned a = 0; a < 3; ++ a) {
     keccak(hash);
     // Coalesced memory writes
-    #pragma unroll 4
     for (unsigned i = 0; i < skip[a]; ++ i) out[i] = hash[i];
     out += skip[a];
   }
@@ -201,7 +196,6 @@ inline sycl::int4 single_comupte(
   sycl::float4 r = sycl::float4(0.0f);
 
   // Partial unroll for better pipeline utilization
-  #pragma unroll 2
   for (int i = 0; i < 4; ++ i) round_compute(n0, n1, n2, n3, rnd_c, &c, &r);
 
   const sycl::float4 r2 = my_and_or_ps(r, 0x807FFFFF, 0x40000000);
@@ -263,7 +257,6 @@ void aes_expend_key(uint32_t* const keybuf) {
   static const uint32_t rcon[8] = { 0x8d, 0x01, 0x02, 0x04, 0x08, 0x10, 0x20, 0x40 };
 
   // Unrolled key expansion for better pipeline utilization
-  #pragma unroll 4
   for (unsigned c = 8, i = 1; c < 40; ++ c) {
     const uint32_t t = ((!(c & 7)) || ((c & 7) == 4)) ? sw(keybuf[c - 1]) : keybuf[c - 1];
     keybuf[c] = keybuf[c - 8] ^ ((!(c & 7)) ? sycl::rotate(t, 24U) ^ rcon[i++] : t);
@@ -435,7 +428,6 @@ void cn_gpu(
 
           // Vectorized XOR operations
 	  { int32_t xo = vi4[b];
-            #pragma unroll 4
             for (unsigned dd = b + 4; dd < (ld + 1) * 16; dd += 4) xo ^= vi4[dd];
             lpad_ptr(s, ld, lpad)[lm] = xo ^ xi;
             vi4[l] = xo;
@@ -516,7 +508,6 @@ void cn_gpu(
           x ^= x2l;
 
           // Unrolled AES rounds for better instruction scheduling
-          #pragma unroll 5
           for (unsigned j = 0; j < 10; ++ j) {
             aes_round(&x, key.u4[j], aes0, aes1, aes2, aes3);
           }
@@ -526,7 +517,6 @@ void cn_gpu(
           x ^= lpad[i1 + 8];
           x ^= x1l;
 
-          #pragma unroll 5
           for (unsigned j = 0; j < 10; ++ j) {
             aes_round(&x, key.u4[j], aes0, aes1, aes2, aes3);
           }
@@ -537,9 +527,7 @@ void cn_gpu(
         x ^= x2l;
 
         // Final rounds with reduced synchronization overhead
-        #pragma unroll 2
         for (unsigned i = 0; i < 16; ++ i) {
-          #pragma unroll 5
           for (unsigned j = 0; j < 10; ++ j) {
             aes_round(&x, key.u4[j], aes0, aes1, aes2, aes3);
           }
@@ -560,7 +548,6 @@ void cn_gpu(
   }
 
   // Final Keccak hashing - keep on CPU for now as it's small workload
-  #pragma omp parallel for
   for (unsigned i = 0; i < batch; ++ i) {
     keccak(static_cast<uint64_t*>(Spads) + 25*i);
     memcpy(output + HASH_LEN*i, static_cast<uint64_t*>(Spads) + 25*i, HASH_LEN);
