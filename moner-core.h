@@ -10,19 +10,20 @@
 #include "consts.h"
 
 typedef void (*cn_any_hash_fun)();
-typedef void (*cn_gpu_hash_fun)(
+typedef void (*gpu_hash_fun)(
+  uint32_t job_id, uint32_t nonce_offset,
   const uint8_t* input, unsigned input_size, uint8_t* output,
-  void* Lpads, void* Spads, unsigned* pbatch, const std::string& dev_str
+  void* Spads, uint32_t* pbatch, const std::string& dev_str
 );
 static_assert(
   sizeof(cn_any_hash_fun) == sizeof(xmrig::cn_hash_fun) &&
-  sizeof(cn_any_hash_fun) == sizeof(cn_gpu_hash_fun),
+  sizeof(cn_any_hash_fun) == sizeof(gpu_hash_fun),
   "Compute function pointers differ in size!"
 );
 union FN {
-  cn_any_hash_fun any;
+  cn_any_hash_fun    any;
   xmrig::cn_hash_fun cpu;
-  cn_gpu_hash_fun    gpu;
+  gpu_hash_fun       gpu;
 };
 enum DEV { CPU, RX_CPU, GPU, C29_GPU };
 
@@ -47,17 +48,17 @@ class Core: public AsyncWorker {
   randomx_vm** m_vm;
   std::mutex m_mutex_hashrate;
 
-  inline uint32_t* get_nonce(uint8_t* const input, const unsigned batch = 0) {
+  inline uint32_t* get_nonce(uint8_t* const input, const unsigned batch) {
     return reinterpret_cast<uint32_t*>(input + (batch * m_input_len) + m_nonce_offset);
   }
-  inline uint32_t* get_nonce(const unsigned batch) {
+  inline uint32_t* get_nonce(const unsigned batch = 0) {
     return get_nonce(m_input, batch);
   }
   // just check the most significant uint64_t value of the full 32-byte hash value
-  inline const uint64_t* get_result(const uint8_t* const output, const unsigned batch = 0) const {
+  inline const uint64_t* get_result(const uint8_t* const output, const unsigned batch) const {
     return reinterpret_cast<const uint64_t*>(output + (batch * HASH_LEN) + 24);
   }
-  inline const uint64_t* get_result(const unsigned batch) const {
+  inline const uint64_t* get_result(const unsigned batch = 0) const {
     return get_result(m_output, batch);
   }
 

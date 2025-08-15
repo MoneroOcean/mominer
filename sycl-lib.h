@@ -13,11 +13,13 @@ std::map<std::string, std::string> algo_params(
 );
 
 void cn_gpu(
+  uint32_t job_id, uint32_t nonce_offset,
   const uint8_t* inputs, unsigned input_size, uint8_t* output,
-  void*, void* Spads, unsigned* pbatch, const std::string& dev_str
+  void* Spads, uint32_t* pbatch, const std::string& dev_str
 );
 
 void c29s(
+  uint32_t job_id, uint32_t nonce_offset,
   const uint8_t* inputs, uint32_t input_size, uint8_t* output,
-  void*, void* output_edges, uint32_t* pbatch, const std::string& dev_str
+  void* output_nonces, uint32_t* pbatch, const std::string& dev_str
 );

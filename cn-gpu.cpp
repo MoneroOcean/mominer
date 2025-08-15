@@ -281,8 +281,8 @@ inline void aes_round(
 }
 
 void cn_gpu(
-  const uint8_t* const inputs, const unsigned input_size, uint8_t* const output,
-  void*, void* const Spads, unsigned* const pbatch, const std::string& dev_str
+  uint32_t, uint32_t, const uint8_t* const inputs, const unsigned input_size, uint8_t* const output,
+  void* const Spads, uint32_t* const pbatch, const std::string& dev_str
 ) {
   const unsigned batch = *pbatch;
   try {

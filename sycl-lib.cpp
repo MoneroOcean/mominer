@@ -110,7 +110,7 @@ std::map<std::string, std::string> algo_params(
         if (dev_str.starts_with("cpu") || dev_str.ends_with("o") || dev_str.ends_with("z"))
           continue;
 	if (algo == "c29s") {
-	  add_result_dev(dev_str + "*8"); // batch 8 here means number of potential solutions to return (usually it is 1 solution only)
+	  add_result_dev(dev_str + "*1"); // batch is not really used by this algo
 	} else {
           const sycl::device& dev = dev_pair.second;
           const unsigned max_compute_units = dev.get_info<sycl::info::device::max_compute_units>();

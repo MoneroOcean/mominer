@@ -23,7 +23,7 @@ let directive = null;
 let test = {
   result_hash_hex: null,
   thread_tested:   0,
-  is_fail:         false
+  result:          ""
 };
 let thread_hashrates = {};
 
@@ -111,12 +111,15 @@ if (!parse_args()) return;
 function messageHandler(msg) {
   switch (msg.type) {
     case "result":
-      p.pool_write(msg.value.pool_id, {
-        jsonrpc: "2.0", id: 3, method: "submit", params: {
-          id: msg.value.worker_id, job_id: msg.value.job_id,
-          nonce: msg.value.nonce, result: msg.value.hash
-        }
-      });
+      let params = {
+        id: msg.value.worker_id, job_id: msg.value.job_id,
+        nonce: msg.value.nonce, result: msg.value.hash
+      };
+      if (msg.value.edges) {
+	params.nonce = parseInt(params.nonce, 16);
+        params.pow = h.edge_hex2arr(msg.value.edges);
+      }
+      p.pool_write(msg.value.pool_id, { jsonrpc: "2.0", id: 3, method: "submit", params: params });
       break;
 
     case "last_nonce": // store max last nonce for background pool job to resume it from there
@@ -134,21 +137,12 @@ function messageHandler(msg) {
     case "test":
       const is_rx = global.opt.job.algo.includes("rx/");
       const batch = h.get_dev_batch(h.get_thread_dev(msg.thread_id, global.opt.job.dev));
-      let result_hash_hex = test.result_hash_hex;
-      // duplicate test result for batch size if test.result_hash_hex does not already dublicated (contain spaces)
-      if (!result_hash_hex.includes(" ")) {
-        const rx_batch = is_rx ? 1 : batch; // for rx algos threads are encoded in batch
-        for (let i = 1; i < rx_batch; ++ i) result_hash_hex += " " + test.result_hash_hex;
-      }
-      if (msg.value.result !== result_hash_hex) {
-        h.log_err("FAILED: " + msg.value.result + " != " + result_hash_hex + " in " +
-                msg.thread_id + " thread");
-        test.is_fail = true;
-      }
       const threads = h.get_dev_threads(global.opt.job.dev);
-      const rx_threads = is_rx ? batch * threads : threads;
-      if (++test.thread_tested >= rx_threads) {
-        if (test.is_fail) {
+      const test_threads = is_rx ? batch * threads : (global.opt.job.algo.includes("c29") ? test.result_hash_hex.trim().split(/\s+/).length : threads);
+      test.result = (test.result ? test.result + " " : "") + msg.value.result;
+      if (++test.thread_tested >= test_threads) {
+        if (test.result_hash_hex != test.result) {
+          h.log_err("FAILED: " + test.result + " != " + test.result_hash_hex + " " + test_threads);
           return exit(1);
         } else {
           h.log("PASSED");
@@ -204,9 +198,9 @@ function set_job(job_json) {
   const job = {
     algo:        algo,
     dev:         dev,
-    blob_hex:    job_json.blob,
+    blob_hex:    job_json.blob ? job_json.blob : job_json.pre_pow + "00000000",
     seed_hex:    job_json.seed_hash,
-    target:      job_json.target,
+    target:      job_json.target ? job_json.target : h.diff2target(job_json.difficulty),
     worker_id:   job_json.id     ? job_json.id     : global.opt.pools[pool_id].worker_id,
     job_id:      job_json.job_id ? job_json.job_id : "",
     nonce:       job_json.nonce  ? job_json.nonce  : 0,

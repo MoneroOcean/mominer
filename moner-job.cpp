@@ -14,8 +14,8 @@
 #include <list>
 #include <thread>
 
-const unsigned MAX_CN_CPU_WAYS = 5;
-const unsigned MAX_BLOB_LEN    = 512;
+const constexpr unsigned MAX_BLOB_LEN    = 512;
+const constexpr unsigned MAX_CN_CPU_WAYS = 5;
 
 static const xmrig::ICpuInfo& ci = *xmrig::Cpu::info();
 
@@ -69,7 +69,7 @@ static const xmrig::CnHash::AlgoVariant cpu_params2variant[MAX_CN_CPU_WAYS][2] =
   { xmrig::CnHash::AV_PENTA,  xmrig::CnHash::AV_PENTA_SOFT  }
 };
 
-static const std::map<std::string, cn_gpu_hash_fun> gpu_algo2fn = {
+static const std::map<std::string, gpu_hash_fun> gpu_algo2fn = {
   { "cn/gpu", cn_gpu  },
   { "c29s",   c29s    }
 };
@@ -157,6 +157,9 @@ void Core::set_job(
   const DEV new_dev = new_dev_str2 == "cpu" ?
                       (new_algo_str.starts_with("rx/") ? DEV::RX_CPU : DEV::CPU) :
                       (new_algo_str.starts_with("c29") ? DEV::C29_GPU : DEV::GPU);
+
+  if (new_dev == DEV::C29_GPU && new_batch != 1)
+    throw std::string("Invalid batch size for c29s algo. Should be 1.");
 
   FN new_fn;
   unsigned new_nonce_offset;
@@ -315,14 +318,14 @@ void Core::set_job(
           alignas(16) uint8_t  output[HASH_LEN];
           alignas(16) uint64_t temp_hash[8];
           uint32_t nonce = new_nonce + new_thread_id * m_batch + batch_id;
-          if (m_is_nicehash) nonce |= *get_nonce(new_input2) & 0xFF000000;
+          if (m_is_nicehash) nonce |= *get_nonce(new_input2, 0) & 0xFF000000;
           const unsigned nonce_step = new_thread_num * m_batch;
           unsigned hashrate_update_counter = HASHRATE_COUNTER_INTERVAL;
           memcpy(input, new_input2, m_input_len);
-          if (is_set_nonce) { *get_nonce(input) = nonce; nonce += nonce_step; }
+          if (is_set_nonce) { *get_nonce(input, 0) = nonce; nonce += nonce_step; }
           randomx_calculate_hash_first(m_vm[thread_id], temp_hash, input, m_input_len);
           while (job_ref == m_job_ref) { // continue until we get a new job
-            uint32_t* const pnonce = get_nonce(input);
+            uint32_t* const pnonce = get_nonce(input, 0);
             const uint32_t prev_nonce = nonce;
             *pnonce = (nonce += nonce_step);
             if (m_target && ( m_is_nicehash ? (prev_nonce & 0xFF000000) != (nonce & 0xFF000000) :
@@ -343,7 +346,7 @@ void Core::set_job(
               m_hash_count += HASHRATE_COUNTER_INTERVAL;
               m_mutex_hashrate.unlock();
             }
-            if (m_target && *get_result(output) < m_target)
+            if (m_target && *get_result(output, 0) < m_target)
               send_result(nonce - nonce_step, output);
           }
           // only send for mine jobs
@@ -357,7 +360,7 @@ void Core::set_job(
     );
   } else {
     m_nonce = new_nonce + new_thread_id;
-    if (m_is_nicehash) m_nonce |= *get_nonce(new_input) & 0xFF000000;
+    if (m_is_nicehash) m_nonce |= *get_nonce(new_input, 0) & 0xFF000000;
     m_nonce_step = new_thread_num;
     for (unsigned i = 0; i != m_batch; ++i) {
       memcpy(m_input + m_input_len*i, new_input, m_input_len);

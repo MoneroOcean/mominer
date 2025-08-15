@@ -132,7 +132,9 @@ function pool_message(pool_id, json, set_job) {
     if (pool_id === global.opt.pool_ids.active) {
       const last_job = set_job(job);
       pool_log(pool_id, "Got new " + last_job.algo + " algo job with " +
-                        h.target2diff(job.target) + " diff");
+                       (job.target ? h.target2diff(job.target) : job.difficulty) + " diff" +
+	               (job.height ? " and " + job.height + " height" : "")
+      );
     } else {
       pool_log2(pool_id, "Storing not active pool job " + JSON.stringify(job));
     }

@@ -38,6 +38,8 @@ const constexpr uint32_t BUCKET_STEP            = 32;
 // Global solution management
 static std::list<std::vector<sycl::uint2>> global_solutions;
 static std::list<std::vector<uint64_t>> global_seeds;
+static std::list<uint32_t> global_job_ids;
+static std::list<uint32_t> global_nonces;
 static std::mutex global_solutions_mutex;
 static std::atomic<uint32_t> running_search_threads{0};
 
@@ -166,9 +168,20 @@ static std::list<std::vector<sycl::uint2>> find_cycles(
   return solutions;
 }
 
+// SipHash cryptographic round function for edge generation
+#define SIPHASH_ROUND_LAMBDA_MACRO\
+  auto siphash_round = [](uint64_t& v0, uint64_t& v1, uint64_t& v2, uint64_t& v3) {\
+    v0 += v1; v2 += v3; v1 = sycl::rotate(v1, static_cast<uint64_t>(13));\
+    v3 = sycl::rotate(v3, static_cast<uint64_t>(16)); v1 ^= v0; v3 ^= v2;\
+    v0 = sycl::rotate(v0, static_cast<uint64_t>(32)); v2 += v1; v0 += v3;\
+    v1 = sycl::rotate(v1, static_cast<uint64_t>(17)); v3 = sycl::rotate(v3, static_cast<uint64_t>(21));\
+    v1 ^= v2; v3 ^= v0; v2 = sycl::rotate(v2, static_cast<uint64_t>(32));\
+  };
+
 // Worker function that performs GPU trimming and cycle finding in separate thread
 static void start_new_c29s_solution_search(const uint64_t seed_k0, const uint64_t seed_k1,
                                            const uint64_t seed_k2, const uint64_t seed_k3,
+					   const uint32_t job_id,  const uint32_t nonce,
                                            sycl::queue& compute_queue) {
   try {
     static auto kernel_bundle = sycl::get_kernel_bundle<sycl::bundle_state::executable>(compute_queue.get_context());
@@ -228,14 +241,7 @@ static void start_new_c29s_solution_search(const uint64_t seed_k0, const uint64_
         if (local_id < 64) bucket_counters[local_id] = 0;
         item.barrier(sycl::access::fence_space::local_space);
 
-        // SipHash cryptographic round function for edge generation
-        auto siphash_round = [](uint64_t& v0, uint64_t& v1, uint64_t& v2, uint64_t& v3) {
-          v0 += v1; v2 += v3; v1 = sycl::rotate(v1, static_cast<uint64_t>(13));
-          v3 = sycl::rotate(v3, static_cast<uint64_t>(16)); v1 ^= v0; v3 ^= v2;
-          v0 = sycl::rotate(v0, static_cast<uint64_t>(32)); v2 += v1; v0 += v3;
-          v1 = sycl::rotate(v1, static_cast<uint64_t>(17)); v3 = sycl::rotate(v3, static_cast<uint64_t>(21));
-          v1 ^= v2; v3 ^= v0; v2 = sycl::rotate(v2, static_cast<uint64_t>(32));
-        };
+	SIPHASH_ROUND_LAMBDA_MACRO;
 
         // Process nonces in blocks to generate graph edges efficiently
         for (uint32_t block_offset = 0; block_offset < 1024 * 2; block_offset += EDGE_BLOCK_SIZE) {
@@ -642,6 +648,8 @@ static void start_new_c29s_solution_search(const uint64_t seed_k0, const uint64_
         for (const auto& solution : solutions) {
           global_solutions.push_back(solution);
 	  global_seeds.push_back(std::vector<uint64_t>{seed_k0, seed_k1, seed_k2, seed_k3});
+	  global_job_ids.push_back(job_id);
+	  global_nonces.push_back(nonce);
 	}
       }
 
@@ -656,8 +664,9 @@ static void start_new_c29s_solution_search(const uint64_t seed_k0, const uint64_
 
 extern int (*rx_blake2b)(void* out, const size_t outlen, const void* in, const size_t inlen);
 
-void c29s(const uint8_t* const inputs, const uint32_t input_size,
-          uint8_t* const output, void*, void* const output_edges,
+void c29s(const uint32_t job_id, const uint32_t nonce_offset,
+	  const uint8_t* const input, const uint32_t input_size,
+          uint8_t* const output, void* const output_nonces,
           uint32_t* const pbatch, const std::string& dev_str) {
 
   try {
@@ -683,153 +692,143 @@ void c29s(const uint8_t* const inputs, const uint32_t input_size,
     }
 
     // Check for existing solutions first
-    std::list<std::vector<sycl::uint2>> current_solutions;
-    std::list<std::vector<uint64_t>> current_seeds;
-    {
-      std::lock_guard<std::mutex> lock(global_solutions_mutex);
-      if (!global_solutions.empty()) {
-        // Move solutions to local vector and clear global list
-        current_solutions.assign(global_solutions.begin(), global_solutions.end());
-	current_seeds.assign(global_seeds.begin(), global_seeds.end());
-        global_solutions.clear();
-	global_seeds.clear();
+    bool has_solution = false;
+    std::vector<sycl::uint2> solution;
+    std::vector<uint64_t> solution_seed;
+    uint32_t solution_job_id;
+    uint32_t solution_nonce;
+
+    { std::lock_guard<std::mutex> lock(global_solutions_mutex);
+      while (!global_solutions.empty()) {
+	solution        = global_solutions.front();
+        solution_seed   = global_seeds.front();
+	solution_job_id = global_job_ids.front();
+	solution_nonce  = global_nonces.front();
+        global_solutions.pop_front();
+        global_seeds.pop_front();
+	global_job_ids.pop_front();
+	global_nonces.pop_front();
+	if (solution_job_id == job_id) { // drop old job solutions
+          has_solution = true;
+	  break;
+	}
       }
     }
 
-    // Process existing solutions if available
-    if (!current_solutions.empty()) {
-      const uint32_t num_solutions = current_solutions.size();
-      const uint32_t solutions_to_process = sycl::min(num_solutions, *pbatch);
+    // Process existing solution if available
+    if (has_solution) {
+      // Convert cycle edges to 64-bit format for recovery kernel
+      std::vector<uint64_t> recovery_edges;
+      recovery_edges.reserve(C29_CYCLE_LEN);
+      for (const auto& edge : solution) recovery_edges.push_back(static_cast<uint64_t>(edge.y()) << 32 | edge.x());
+      const uint64_t k0 = solution_seed[0], k1 = solution_seed[1], k2 = solution_seed[2], k3 = solution_seed[3];
 
-      // Process each solution using FluffyRecovery kernel
-      for (uint32_t sol_idx = 0; sol_idx < solutions_to_process; sol_idx++) {
-        // Convert cycle edges to 64-bit format for recovery kernel
-        const std::vector<sycl::uint2> solution = std::move(current_solutions.front());
-        current_solutions.pop_front();
-        std::vector<uint64_t> recovery_edges;
-        recovery_edges.reserve(C29_CYCLE_LEN);
-	for (const auto& edge : solution) recovery_edges.push_back(static_cast<uint64_t>(edge.y()) << 32 | edge.x());
+      // Create SYCL buffers for edge recovery
+      sycl::buffer<uint64_t, 1> buffer_edges{recovery_edges.data(), sycl::range<1>{C29_CYCLE_LEN}};
+      sycl::buffer<uint32_t, 1> buffer_nonces{sycl::range<1>{32}};
 
-        const std::vector<uint64_t> seed = std::move(current_seeds.front());
-        current_seeds.pop_front();
-	const uint64_t k0 = seed[0], k1 = seed[1], k2 = seed[2], k3 = seed[3];
+      // FluffyRecovery kernel - find nonces that generate solution edges
+      compute_queue.submit([&](sycl::handler& handler) {
+        sycl::accessor acc_edges{buffer_edges, handler, sycl::read_only};
+        sycl::accessor acc_nonces{buffer_nonces, handler, sycl::write_only, sycl::no_init};
+        sycl::local_accessor<uint32_t, 1> local_nonces{sycl::range<1>{32}, handler};
 
-        // Create SYCL buffers for edge recovery
-        sycl::buffer<uint64_t, 1> buffer_edges{recovery_edges.data(), sycl::range<1>{C29_CYCLE_LEN}};
-        sycl::buffer<uint32_t, 1> buffer_nonces{sycl::range<1>{32}};
+        handler.use_kernel_bundle(kernel_bundle);
+        handler.parallel_for(sycl::nd_range<1>(sycl::range<1>(2048 * 256), sycl::range<1>(256)),
+                            [=](sycl::nd_item<1> item) {
+          const uint32_t gid = item.get_global_id(0);
+          const uint32_t lid = item.get_local_id(0);
 
-        // FluffyRecovery kernel - find nonces that generate solution edges
-        compute_queue.submit([&](sycl::handler& handler) {
-          sycl::accessor acc_edges{buffer_edges, handler, sycl::read_only};
-          sycl::accessor acc_nonces{buffer_nonces, handler, sycl::write_only, sycl::no_init};
-          sycl::local_accessor<uint32_t, 1> local_nonces{sycl::range<1>{32}, handler};
+          // Initialize local memory for found nonces
+          if (lid < 32) local_nonces[lid] = 0;
+          item.barrier(sycl::access::fence_space::local_space);
 
-          handler.use_kernel_bundle(kernel_bundle);
-          handler.parallel_for(sycl::nd_range<1>(sycl::range<1>(2048 * 256), sycl::range<1>(256)),
-                              [=](sycl::nd_item<1> item) {
-            const uint32_t gid = item.get_global_id(0);
-            const uint32_t lid = item.get_local_id(0);
+	  SIPHASH_ROUND_LAMBDA_MACRO
 
-            // Initialize local memory for found nonces
-            if (lid < 32) local_nonces[lid] = 0;
-            item.barrier(sycl::access::fence_space::local_space);
+          // Search nonce space in blocks for efficiency
+          for (uint32_t block = 0; block < 1024; block += EDGE_BLOCK_SIZE) {
+            const uint64_t base_nonce = gid * 1024 + block;
 
-            // SipHash cryptographic round function
-            auto siphash_round = [](uint64_t& v0, uint64_t& v1, uint64_t& v2, uint64_t& v3) {
-              v0 += v1; v2 += v3; v1 = sycl::rotate(v1, static_cast<uint64_t>(13));
-              v3 = sycl::rotate(v3, static_cast<uint64_t>(16)); v1 ^= v0; v3 ^= v2;
-              v0 = sycl::rotate(v0, static_cast<uint64_t>(32)); v2 += v1; v0 += v3;
-              v1 = sycl::rotate(v1, static_cast<uint64_t>(17)); v3 = sycl::rotate(v3, static_cast<uint64_t>(21));
-              v1 ^= v2; v3 ^= v0; v2 = sycl::rotate(v2, static_cast<uint64_t>(32));
-            };
+            uint64_t v0 = k0, v1 = k1, v2 = k2, v3 = k3;
+            uint64_t sip_block[EDGE_BLOCK_SIZE];
 
-            // Search nonce space in blocks for efficiency
-            for (uint32_t block = 0; block < 1024; block += EDGE_BLOCK_SIZE) {
-              const uint64_t base_nonce = gid * 1024 + block;
-
-              uint64_t v0 = k0, v1 = k1, v2 = k2, v3 = k3;
-              uint64_t sip_block[EDGE_BLOCK_SIZE];
-
-              // Generate SipHash values for nonce block
-              for (uint32_t b = 0; b < EDGE_BLOCK_SIZE; b++) {
-                v3 ^= base_nonce + b;
-                siphash_round(v0, v1, v2, v3); siphash_round(v0, v1, v2, v3);
-                v0 ^= base_nonce + b;
-                v2 ^= 0xff;
-                siphash_round(v0, v1, v2, v3); siphash_round(v0, v1, v2, v3);
-                siphash_round(v0, v1, v2, v3); siphash_round(v0, v1, v2, v3);
-                sip_block[b] = (v0 ^ v1) ^ (v2 ^ v3);
-              }
-
-              const uint64_t last = sip_block[EDGE_BLOCK_MASK];
-
-              // Check each generated edge against target edges
-              for (int32_t s = EDGE_BLOCK_MASK; s >= 0; s--) {
-                const uint64_t lookup = s == EDGE_BLOCK_MASK ? last : sip_block[s] ^ last;
-                const uint64_t u      = lookup & EDGE_MASK;
-                const uint64_t v      = (lookup >> 32) & EDGE_MASK;
-                const uint64_t edge_a = u | (v << 32);
-                const uint64_t edge_b = v | (u << 32);
-
-                // Match against solution edges (both orientations)
-                for (uint32_t idx = 0; idx < 32; idx++) {
-                  if (acc_edges[idx] == edge_a || acc_edges[idx] == edge_b)
-                    local_nonces[idx] = base_nonce + s;
-                }
-              }
+            // Generate SipHash values for nonce block
+            for (uint32_t b = 0; b < EDGE_BLOCK_SIZE; b++) {
+              v3 ^= base_nonce + b;
+              siphash_round(v0, v1, v2, v3); siphash_round(v0, v1, v2, v3);
+              v0 ^= base_nonce + b;
+              v2 ^= 0xff;
+              siphash_round(v0, v1, v2, v3); siphash_round(v0, v1, v2, v3);
+              siphash_round(v0, v1, v2, v3); siphash_round(v0, v1, v2, v3);
+              sip_block[b] = (v0 ^ v1) ^ (v2 ^ v3);
             }
 
-            item.barrier(sycl::access::fence_space::local_space);
+            const uint64_t last = sip_block[EDGE_BLOCK_MASK];
 
-            // Write recovered nonces to global memory
-            if (lid < 32 && local_nonces[lid] > 0) acc_nonces[lid] = local_nonces[lid];
-          });
-        });
+            // Check each generated edge against target edges
+            for (int32_t s = EDGE_BLOCK_MASK; s >= 0; s--) {
+              const uint64_t lookup = s == EDGE_BLOCK_MASK ? last : sip_block[s] ^ last;
+              const uint64_t u      = lookup & EDGE_MASK;
+              const uint64_t v      = (lookup >> 32) & EDGE_MASK;
+              const uint64_t edge_a = u | (v << 32);
+              const uint64_t edge_b = v | (u << 32);
 
-        // Read recovered nonces from device
-        std::vector<uint32_t> nonces(32);
-        { sycl::host_accessor acc{buffer_nonces, sycl::read_only};
-	  std::memcpy(nonces.data(), acc.get_pointer(), 32 * sizeof(uint32_t));
-        }
-
-        // Sort nonces as required by Cuckaroo29 protocol
-        std::sort(nonces.begin(), nonces.end());
-
-        // Pack nonces into bitstream (EDGE_BITS bits per nonce)
-        const constexpr uint32_t packed_len = C29_CYCLE_LEN * EDGE_BITS / 8;
-        uint8_t packed[packed_len] = {0};
-        uint32_t bit_pos = 0;
-
-        for (const uint32_t nonce : nonces) {
-          for (uint32_t bit = 0; bit < EDGE_BITS; bit++) {
-            if (nonce & (1u << bit)) {
-              const uint32_t byte_idx = bit_pos / 8;
-              const uint32_t bit_idx  = bit_pos % 8;
-              packed[byte_idx] |= (1u << bit_idx);
+              // Match against solution edges (both orientations)
+              for (uint32_t idx = 0; idx < 32; idx++) {
+                if (acc_edges[idx] == edge_a || acc_edges[idx] == edge_b)
+                  local_nonces[idx] = base_nonce + s;
+              }
             }
-            bit_pos++;
           }
-        }
 
-        // Generate proof hash by hashing packed solution
-        rx_blake2b(output + (sol_idx * C29_CYCLE_LEN), C29_CYCLE_LEN, packed, packed_len);
+          item.barrier(sycl::access::fence_space::local_space);
 
-        // Store nonces in edge output buffer
-        std::memcpy(static_cast<uint32_t*>(output_edges) + sol_idx * SPAD_LEN, nonces.data(), C29_CYCLE_LEN * sizeof(uint32_t));
+          // Write recovered nonces to global memory
+          if (lid < 32 && local_nonces[lid] > 0) acc_nonces[lid] = local_nonces[lid];
+        });
+      });
+
+      // Read recovered nonces from device
+      std::vector<uint32_t> nonces(32);
+      { sycl::host_accessor acc{buffer_nonces, sycl::read_only};
+        std::memcpy(nonces.data(), acc.get_pointer(), 32 * sizeof(uint32_t));
       }
 
-      *pbatch = solutions_to_process; // Update solution count
+      // Sort nonces as required by Cuckaroo29 protocol
+      std::sort(nonces.begin(), nonces.end());
+
+      // Pack nonces into bitstream (EDGE_BITS bits per nonce)
+      const constexpr uint32_t packed_len = C29_CYCLE_LEN * EDGE_BITS / 8;
+      uint8_t packed[packed_len] = {0};
+      uint32_t bit_pos = 0;
+
+      for (const uint32_t nonce : nonces) {
+        for (uint32_t bit = 0; bit < EDGE_BITS; bit++) {
+          if (nonce & (1u << bit)) {
+            const uint32_t byte_idx = bit_pos / 8;
+            const uint32_t bit_idx  = bit_pos % 8;
+            packed[byte_idx] |= (1u << bit_idx);
+          }
+          bit_pos++;
+        }
+      }
+
+      // Generate proof hash by hashing packed solution
+      rx_blake2b(output, C29_CYCLE_LEN, packed, packed_len);
+
+      // Store nput nonce and edge nonces in edge output buffer
+      *static_cast<uint32_t*>(output_nonces) = solution_nonce;
+      std::memcpy(static_cast<uint32_t*>(output_nonces) + 1, nonces.data(), C29_CYCLE_LEN * sizeof(uint32_t));
+
+      *pbatch = 1; // Update solution count
 
     } else if (input_size) { // Start new solution search thread
-      uint8_t blake_output[32];
-      rx_blake2b(blake_output, 32, inputs, input_size);
-
-      const uint64_t k0 = *reinterpret_cast<const uint64_t*>(blake_output + 0);
-      const uint64_t k1 = *reinterpret_cast<const uint64_t*>(blake_output + 8);
-      const uint64_t k2 = *reinterpret_cast<const uint64_t*>(blake_output + 16);
-      const uint64_t k3 = *reinterpret_cast<const uint64_t*>(blake_output + 24);
-
-      start_new_c29s_solution_search(k0, k1, k2, k3, compute_queue);
+      union { uint8_t blake_output[32]; uint64_t k[4]; };
+      rx_blake2b(blake_output, 32, input, input_size);
+      start_new_c29s_solution_search(
+        k[0], k[1], k[2], k[3], job_id,
+	*reinterpret_cast<const uint32_t*>(input + nonce_offset), compute_queue
+      );
       *pbatch = 0; // No immediate results
 
     } else { // Check if any threads are still running and return -1 if not more solutions are expected

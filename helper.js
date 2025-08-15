@@ -186,3 +186,27 @@ module.exports.target2diff = function(target) {
   return BigInt("0xFFFFFFFFFFFFFFFF") / div;
 };
 
+module.exports.diff2target = function(diff) {
+  if (diff === 0n) return "0000000000000000";
+  // Reverse of: div = BigInt(0xFFFFFFFFFFFFFFFF) / diff
+  let div = BigInt("0xFFFFFFFFFFFFFFFF") / BigInt(diff);
+  // Convert to hex without `0x`
+  let hexLE = div.toString(16).padStart(16, "0");
+  // Reverse LE -> BE
+  let hexBE = hexLE.match(/.{2}/g).reverse().join("");
+  // If 8-byte (16 hex chars), remove leading zeros to match original style
+  if (hexBE.startsWith("00000000")) {
+    hexBE = hexBE.slice(8);
+  }
+  return hexBE;
+};
+
+module.exports.edge_hex2arr = function(hex) {
+  const pow = [];
+  const size = 8; // 8 hex chars per uint32_t
+  for (let i = 0; i < hex.length; i += size) {
+    const hex1 = hex.slice(i, i + size);
+    pow.push(parseInt(hex1, 16)); // to decimal integer
+  }
+  return pow;
+}

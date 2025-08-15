@@ -388,8 +388,8 @@ void Core::Execute(const AsyncProgressQueueWorker<char>::ExecutionProgress& prog
 
           case DEV::GPU:
           case DEV::C29_GPU:
-            m_fn.gpu(m_input, m_input_len, m_output, nullptr, m_spads,
-                     &output_len, m_dev_str);
+            m_fn.gpu(m_job_ref, m_nonce_offset, m_input, m_input_len, m_output,
+	             m_spads, &output_len, m_dev_str);
             break;
 
           case DEV::RX_CPU: throw "Internal error: Unreachable code executed";
@@ -407,31 +407,38 @@ void Core::Execute(const AsyncProgressQueueWorker<char>::ExecutionProgress& prog
       if (!m_nonce) { // test job
 	m_input_len = 0; // do not produce any more test jobs for async GPU code like in c29s
 	if (output_len != 0) {
-	  if (output_len == static_cast<uint32_t>(-1)) output_len = 0; // no more results are expected
-          std::string result_hash_str;
-          for (unsigned i = 0; i != output_len; ++ i) {
-            if (i) result_hash_str += " ";
-            char hash[HASH_LEN*2+1];
-           result_hash_str += hash_bin2hex(hash, i);
-           }
-          send_msg("test", "result", result_hash_str);
-          set_fn(nullptr);
+	  if (output_len != static_cast<uint32_t>(-1)) {
+            std::string result_hash_str;
+            for (unsigned i = 0; i != output_len; ++ i) {
+              if (i) result_hash_str += " ";
+              char hash[HASH_LEN*2+1];
+              result_hash_str += hash_bin2hex(hash, i);
+            }
+            send_msg("test", "result", result_hash_str);
+	    if (m_dev != DEV::C29_GPU) set_fn(nullptr); // no async solutions
+	  } else set_fn(nullptr); // found all async solutions
 	}
         continue;
       }
 
-      m_hash_count += m_dev == DEV::C29_GPU ? 1 : m_batch; // here we do not need mutex since there are no threads
-
+      m_hash_count += m_batch; // here we do not need mutex since there are no threads
       const uint32_t prev_nonce = m_nonce;
-      for (unsigned i = 0; i != output_len; ++i) {
-        uint32_t* const pnonce = get_nonce(i);
-        if (m_target && *get_result(i) < m_target)
-	  send_result(
-	    *pnonce, m_output + HASH_LEN * i,
-	    // for C29 algo we pass solution grapg edges via m_spads
-	    m_dev == DEV::C29_GPU ? static_cast<uint32_t*>(m_spads) + SPAD_LEN * i : nullptr
+
+      if (m_dev != DEV::C29_GPU) {
+        for (unsigned i = 0; i != output_len; ++i) {
+          uint32_t* const pnonce = get_nonce(i);
+          if (m_target && *get_result(i) < m_target)
+	    send_result(*pnonce, m_output + HASH_LEN * i);
+          *pnonce = m_nonce;
+          m_nonce += m_nonce_step;
+        }
+      } else {
+        if (output_len && m_target && *get_result() < m_target)
+          // for C29 algo we pass input nonce (needed since it is from older c29s call) and solution graph edges via m_spads
+          send_result(*static_cast<uint32_t*>(m_spads), m_output,
+            static_cast<uint32_t*>(m_spads) + 1
           );
-        *pnonce = m_nonce;
+        *get_nonce() = m_nonce;
         m_nonce += m_nonce_step;
       }
 
