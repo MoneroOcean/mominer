@@ -17,7 +17,7 @@ is possible and WIP.
 # Supported algos
 
 * CPU: All xmrig miner CPU supported algos with similar performance
-* GPU: cn/gpu
+* GPU: cn/gpu, c29s
 
 Miner supports algo switching if you connect it to algo switching pool like
 gulf.moneroocean.stream that auto switches to the most profitable algo.
