@@ -1,8 +1,8 @@
 { "targets": [
-  { "target_name": "moner",
+  { "target_name": "mominer",
     "sources": [
-      "moner-core.cpp",
-      "moner-job.cpp",
+      "mominer-core.cpp",
+      "mominer-job.cpp",
 
       "xmrig/crypto/common/VirtualMemory.cpp",
       "xmrig/crypto/common/VirtualMemory_unix.cpp",

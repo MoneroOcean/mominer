@@ -1,5 +1,5 @@
-{ "name":    "moner",
-  "version": "0.3.0",
+{ "name":    "mominer",
+  "version": "0.3.1",
   "author": {
     "name":  "MoneroOcean",
     "email": "support@moneroocean.stream"
@@ -7,7 +7,7 @@
   "license": "GPL-3.0-or-later",
   "repository": {
     "type": "git",
-    "url":  "https://github.com/MoneroOcean/moner.git"
+    "url":  "https://github.com/MoneroOcean/mominer.git"
   },
   "dependencies": {
     "nan": "^2.17.0",

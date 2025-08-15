@@ -118,7 +118,7 @@ class AsyncWorker: public Nan::AsyncProgressQueueWorker<char> {
   AsyncWorker(
     Nan::Callback* const progress, Nan::Callback* const callback,
     Nan::Callback* const error_callback
-  ) : Nan::AsyncProgressQueueWorker<char>(callback, "moner-core::AsyncWorker"),
+  ) : Nan::AsyncProgressQueueWorker<char>(callback, "mominer-core::AsyncWorker"),
       m_progress(progress), m_error_callback(error_callback) {}
 
   ~AsyncWorker() {

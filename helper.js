@@ -36,9 +36,9 @@ module.exports.log_err = function(str) {
 
 module.exports.create_core = function() {
   this.log3("Starting compute core in " + thread_id + " thread");
-  const deploy_path = path.join(__dirname, "./moner.node");
+  const deploy_path = path.join(__dirname, "./mominer.node");
   const core_path   = fs.existsSync(deploy_path) ? deploy_path :
-                      path.join(__dirname, "/build/Release/moner.node");
+                      path.join(__dirname, "/build/Release/mominer.node");
   const core_module = require(core_path);
   let emitter = new events();
   let worker = new core_module.AsyncWorker(

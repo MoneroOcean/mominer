@@ -5,9 +5,9 @@
 const path = require("path");
 const h    = require(path.join(__dirname, 'helper.js'));
 
-const version_str = "0.1.1";
+const version_str = "0.3.1";
 
-module.exports.agent_str = "Moner v" + version_str;
+module.exports.agent_str = "MoMiner v" + version_str;
 
 module.exports.pool_create = function(url, port, is_tls, login, pass) {
   return {
@@ -168,7 +168,7 @@ module.exports.print_opt_help = function(opt_help, depth_str, base_key_path_str)
 module.exports.print_help = function(err_str) {
   const str = `
 # Node.js/SYCL based CPU/GPU miner v${version_str}
-$ node moner.js <directive> <parameter>+ [<option>+]
+$ node mominer.js <directive> <parameter>+ [<option>+]
 
 Directives:
   mine  (<pool_address:port[tls]> <login> [<pass>]|<config.json>)

@@ -1,6 +1,6 @@
 // Copyright GNU GPLv3 (c) 2023-2025 MoneroOcean <support@moneroocean.stream>
 
-#include "moner-core.h"
+#include "mominer-core.h"
 
 #include "3rdparty/fmt/core.h"
 #include "backend/cpu/Cpu.h"
@@ -463,4 +463,4 @@ AsyncWorker* create_worker(
   return new Core(data, complete, error_callback, options);
 }
 
-NODE_MODULE(moner_core, AsyncWorkerWrapper::Init)
+NODE_MODULE(mominer_core, AsyncWorkerWrapper::Init)

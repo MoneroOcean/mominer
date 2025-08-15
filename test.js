@@ -6,7 +6,7 @@ const child_process = require("child_process");
 
 function test(job, result, cb) {
   if (!("dev" in job)) job.dev = "cpu";
-  const cmd = "node moner.js test " + job.algo + " '" + result + "' --job '" +
+  const cmd = "node mominer.js test " + job.algo + " '" + result + "' --job '" +
               JSON.stringify(job) + "'";
 
   let output = "";

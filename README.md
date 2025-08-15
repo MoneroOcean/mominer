@@ -1,8 +1,8 @@
-## Moner
+## MoMiner
 
 # About
 
-Moner is open-source cryptocurrency miner that is built upon high performance xmrig CPU miner
+MoMiner is open-source cryptocurrency miner that is built upon high performance xmrig CPU miner
 sources with front-end and network backend rewritten in Node.js to significantly simplify its code.
 GPU mining sources are also simplified and rewritten in SYCL from OpenCL/CUDA.
 The main goal of this project is to make simple, easy to extend open-source miner with native
@@ -28,18 +28,18 @@ By default, miner donates 1% of hashrate (can be disabled in config).
 
 # Distribution
 
-Miner moner.node dynamic library can be compiled and run from sources using ./r.sh script that
+Miner mominer.node dynamic library can be compiled and run from sources using ./r.sh script that
 will build docker container with SYCL compiler:
 
 ```
-git clone https://github.com/MoneroOcean/moner.git
-cd moner
+git clone https://github.com/MoneroOcean/mominer.git
+cd mominer
 ./r.sh
 ```
 
-There is also x86-64 Linux .tgz archive distribution with precompiled moner.node and SYCL
-libraries where you can use docker-moner.sh script to run miner inside docker container with
-Intel Level-Zero/OpenCL runtimes or you can use moner.sh script to run miner if you have
+There is also x86-64 Linux .tgz archive distribution with precompiled mominer.node and SYCL
+libraries where you can use docker-mominer.sh script to run miner inside docker container with
+Intel Level-Zero/OpenCL runtimes or you can use mominer.sh script to run miner if you have
 these runtimes already installed on your system.
 
 # Usage example
@@ -49,7 +49,7 @@ benchmarks all supported algos and will start mining (this is perf numbers for I
 and Intel Arc B580 GPU):
 
 ```
-$ ./docker-moner.sh mine gulf.moneroocean.stream:20001tls 89TxfrUmqJJcb1V124WsUzA78Xa3UYHt7Bg8RGMhXVeZYPN8cE5CZEk58Y1m23ZMLHN7wYeJ9da5n5MXharEjrm41hSnWHL --save_config config.json
+$ ./docker-mominer.sh mine gulf.moneroocean.stream:20001tls 89TxfrUmqJJcb1V124WsUzA78Xa3UYHt7Bg8RGMhXVeZYPN8cE5CZEk58Y1m23ZMLHN7wYeJ9da5n5MXharEjrm41hSnWHL --save_config config.json
 ...
 gpu1: Intel(R) oneAPI Unified Runtime over Level-Zero
 gpu1o: Intel(R) OpenCL Graphics
@@ -97,7 +97,7 @@ gpu1z: Intel(R) oneAPI Unified Runtime over Level-Zero
 Next time you can reuse saved config.json file to avoid running benchmarks again before mining:
 
 ```
-$ ./docker-moner.sh mine ./config.json
+$ ./docker-mominer.sh mine ./config.json
 sha256:d59ea9964e92182e5751a19e296b05209f6545ead6b1a010174f0dbf6fb7f761
 2023-02-24 05:55:59 Loading config file ./config.json
 2023-02-24 05:55:59 Connecting to primary gulf.moneroocean.stream:20064tls pool
@@ -109,11 +109,11 @@ sha256:d59ea9964e92182e5751a19e296b05209f6545ead6b1a010174f0dbf6fb7f761
 Without parameters miner will show help:
 
 ```
-$ ./docker-moner.sh
+$ ./docker-mominer.sh
 sha256:d59ea9964e92182e5751a19e296b05209f6545ead6b1a010174f0dbf6fb7f761
 
 # Node.js/SYCL based CPU/GPU miner v0.1
-$ node moner.js <directive> <parameter>+ [<option>+]
+$ node mominer.js <directive> <parameter>+ [<option>+]
 
 Directives:
   mine  (<pool_address:port[tls]> <login> [<pass>]|<config.json>)
@@ -161,8 +161,8 @@ Options:
 You can run test and benchmark separately for algo you need like this:
 
 ```
-./r.sh node moner.js test cn/gpu e55cb23e51649a59b127b96b515f2bf7bfea199741a0216cf838ded06eff82df --job '{"algo":"cn/gpu","dev":"gpu1*8"}'
-./r.sh node moner.js bench cn/gpu --job '{"algo":"cn/gpu","dev":"gpu1z*960"}'
+./r.sh node mominer.js test cn/gpu e55cb23e51649a59b127b96b515f2bf7bfea199741a0216cf838ded06eff82df --job '{"algo":"cn/gpu","dev":"gpu1*8"}'
+./r.sh node mominer.js bench cn/gpu --job '{"algo":"cn/gpu","dev":"gpu1z*960"}'
 ```
 
 Enable huge pages for better performance (check [Huge Pages](https://xmrig.com/docs/miner/hugepages)):

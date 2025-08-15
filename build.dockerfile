@@ -1,4 +1,4 @@
-FROM moner-deploy
+FROM mominer-deploy
 
 # install tools to build SYCL compiler and run our nodejs miner
 RUN apt-get update && apt-get install -y --no-install-recommends\
@@ -37,11 +37,11 @@ RUN rm /bin/sh && ln -s /bin/bash /bin/sh
 
 # setup env for docker user commands
 RUN echo $'#!/usr/bin/env bash\n\
-    useradd user -u $(stat -c "%g" /root/moner) -G root,video -m -s /bin/bash\n\
+    useradd user -u $(stat -c "%g" /root/mominer) -G root,video -m -s /bin/bash\n\
     echo "user ALL=(ALL) NOPASSWD:ALL" >/etc/sudoers.d/user-user\n\
     echo "#!/usr/bin/env bash" >/root/cmd.sh\n\
     echo "npm update &&" >>/root/cmd.sh\n\
-    echo "( test -s ./build/Release/moner.node ||"\
+    echo "( test -s ./build/Release/mominer.node ||"\
          "CC=clang CXX=clang++ node-gyp configure ) &&" >>/root/cmd.sh\n\
     echo "JOBS=$(nproc) CC=clang CXX=clang++ node-gyp build &&" >>/root/cmd.sh\n\
     echo "if [ $# -eq 1 ]; then" >>/root/cmd.sh\n\
@@ -53,5 +53,5 @@ RUN echo $'#!/usr/bin/env bash\n\
 ENTRYPOINT ["/root/entrypoint.sh"]
 
 # sync user with host, build and run application
-WORKDIR /root/moner
+WORKDIR /root/mominer
 CMD node test.js
