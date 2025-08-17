@@ -43,12 +43,14 @@ std::map<std::string, std::string> algo_params(
   const unsigned cpu_sockets, const unsigned cpu_threads, const unsigned cpu_l3cache,
   const std::map<std::string, unsigned>& algo2mem,
   const std::set<std::string>& cpu_algos,
-  const std::set<std::string>& gpu_algos
+  const std::set<std::string>& gpu_cn_algos,
+  const std::set<std::string>& gpu_c29_algos
 ) {
   if (str2dev.empty()) update_str2dev(true);
   std::map<std::string, std::string> result;
   std::set<std::string> algos = cpu_algos;
-  algos.insert(gpu_algos.begin(), gpu_algos.end());
+  algos.insert(gpu_cn_algos.begin(), gpu_cn_algos.end());
+  algos.insert(gpu_c29_algos.begin(), gpu_c29_algos.end());
   for (const auto& algo : algos) {
     std::string result_dev;
     auto add_result_dev = [&](const std::string& add_str) {
@@ -103,33 +105,37 @@ std::map<std::string, std::string> algo_params(
         add_last_dev();
       } else add_result_dev("cpu^" + std::to_string(cpu_threads)); // default fallback
     }
-    if (gpu_algos.contains(algo)) {
+    if (gpu_cn_algos.contains(algo)) {
       for (const auto& dev_pair : str2dev) {
         const std::string dev_str = dev_pair.first;
         // CPU and explicit GPU platforms are not used by default
         if (dev_str.starts_with("cpu") || dev_str.ends_with("o") || dev_str.ends_with("z"))
           continue;
-	if (algo == "c29s") {
-	  add_result_dev(dev_str + "*1"); // batch is not really used by this algo
-	} else {
-          const sycl::device& dev = dev_pair.second;
-          const unsigned max_compute_units = dev.get_info<sycl::info::device::max_compute_units>();
-          if (algo2mem.contains(algo)) {
-            const unsigned batch_mem        = algo2mem.at(algo),
-                           max_alloc_batch  = (dev.get_info<sycl::info::device::max_mem_alloc_size>()
-                                              / batch_mem) & 0xFFFFFFF8,
-                           max_batch        = dev.get_info<sycl::info::device::global_mem_size>()
-                                              / batch_mem,
-                           max_thread_batch = std::min(max_alloc_batch, max_batch),
-                           best_batch       = std::min(max_compute_units * 6, max_batch);
-            unsigned used_batch = 0;
-            while (used_batch < best_batch) {
-              const unsigned current_batch = std::min(best_batch - used_batch, max_thread_batch);
-              add_result_dev(dev_str + "*" + std::to_string(current_batch));
-              used_batch += current_batch;
-            }
-          } else add_result_dev(dev_str + "*" + std::to_string(max_compute_units));
-	}
+        const sycl::device& dev = dev_pair.second;
+        const unsigned max_compute_units = dev.get_info<sycl::info::device::max_compute_units>();
+        if (algo2mem.contains(algo)) {
+          const unsigned batch_mem        = algo2mem.at(algo),
+                         max_alloc_batch  = (dev.get_info<sycl::info::device::max_mem_alloc_size>()
+                                            / batch_mem) & 0xFFFFFFF8,
+                         max_batch        = dev.get_info<sycl::info::device::global_mem_size>()
+                                            / batch_mem,
+                         max_thread_batch = std::min(max_alloc_batch, max_batch),
+                         best_batch       = std::min(max_compute_units * 6, max_batch);
+          unsigned used_batch = 0;
+          while (used_batch < best_batch) {
+            const unsigned current_batch = std::min(best_batch - used_batch, max_thread_batch);
+            add_result_dev(dev_str + "*" + std::to_string(current_batch));
+            used_batch += current_batch;
+          }
+        } else add_result_dev(dev_str + "*" + std::to_string(max_compute_units));
+      }
+    } else if (gpu_c29_algos.contains(algo)) {
+      for (const auto& dev_pair : str2dev) {
+        const std::string dev_str = dev_pair.first;
+        // CPU and explicit GPU platforms are not used by default
+        if (dev_str.starts_with("cpu") || dev_str.ends_with("o") || dev_str.ends_with("z"))
+          continue;
+        add_result_dev(dev_str + "*1"); // batch is not really used by this algo
       }
     }
     result[algo] = result_dev;

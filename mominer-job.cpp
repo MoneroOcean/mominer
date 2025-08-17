@@ -15,6 +15,7 @@
 #include <thread>
 
 const constexpr unsigned MAX_BLOB_LEN    = 512;
+const constexpr unsigned SPAD_LEN        = 200;
 const constexpr unsigned MAX_CN_CPU_WAYS = 5;
 
 static const xmrig::ICpuInfo& ci = *xmrig::Cpu::info();
@@ -69,15 +70,18 @@ static const xmrig::CnHash::AlgoVariant cpu_params2variant[MAX_CN_CPU_WAYS][2] =
   { xmrig::CnHash::AV_PENTA,  xmrig::CnHash::AV_PENTA_SOFT  }
 };
 
-static const std::map<std::string, gpu_hash_fun> gpu_algo2fn = {
-  { "cn/gpu", cn_gpu  },
-  { "c29s",   c29s    }
+static const std::map<std::string, gpu_cn_hash_fun> gpu_cn_algo2fn = {
+  { "cn/gpu", cn_gpu },
+};
+
+static const std::map<std::string, gpu_c29_hash_fun> gpu_c29_algo2fn = {
+  { "c29", c29 }
 };
 
 static const std::map<std::string, unsigned> algo2mem = [](){
   std::map<std::string, unsigned> result = {
     { "cn/gpu", 2*1024*1024 }, // host memory is not really used (number used only for algo_params calcs)
-    { "c29s",   0 }            // host memory is not used even for algo_params calcs
+    { "c29",    0 }            // host memory is not used even for algo_params calcs
   };
   for (const auto& i : cpu_name2algo) result[i.first] = xmrig::Algorithm(i.second).l3();
   return result;
@@ -135,18 +139,24 @@ void Core::set_job(
   if (!v.contains("algo"))     throw std::string("Missing algo job key");
   if (!v.contains("blob_hex")) throw std::string("Missing blob_hex job key");
 
-  const std::string new_dev_str    = v.at("dev"),
-                    new_algo_str   = v.at("algo"),
-                    new_input_hex  = v.at("blob_hex"),
-                    new_seed_hex   = v.contains("seed_hex") ? v.at("seed_hex") : std::string();
-  const unsigned    new_height     = v.contains("height") ? atoi(v.at("height").c_str()) : 0,
-                    new_thread_id  = v.contains("thread_id") ?
-                                     atoi(v.at("thread_id").c_str()) : 0,
-                    new_thread_num = v.contains("thread_num") ?
-                                     atoi(v.at("thread_num").c_str()) : 1;
-  const uint32_t    new_nonce      = v.contains("nonce") ? atoi(v.at("nonce").c_str()) : 0;
-  const bool        new_nicehash   = v.contains("is_nicehash") ?
-                                     atoi(v.at("is_nicehash").c_str()) : 0;
+  const std::string new_dev_str        = v.at("dev"),
+                    new_algo_str       = v.at("algo"),
+                    new_input_hex      = v.at("blob_hex"),
+                    new_seed_hex       = v.contains("seed_hex") ? v.at("seed_hex") : std::string();
+  const unsigned    new_height         = v.contains("height") ? atoi(v.at("height").c_str()) : 0,
+                    new_thread_id      = v.contains("thread_id") ?
+                                         atoi(v.at("thread_id").c_str()) : 0,
+                    new_thread_num     = v.contains("thread_num") ?
+                                         atoi(v.at("thread_num").c_str()) : 1,
+                    new_nonce_bytes    = v.contains("noncebytes") ?
+                                         atoi(v.at("noncebytes").c_str()) : 4,
+		    new_nonce_offset   = v.contains("nonceoffset") ?
+                                         atoi(v.at("nonceoffset").c_str()) : 39,
+		    new_c29_proof_size = v.contains("proofsize") ?
+                                         atoi(v.at("proofsize").c_str()) : 32;
+  const uint64_t    new_nonce          = v.contains("nonce") ? atoi(v.at("nonce").c_str()) : 0;
+  const bool        new_nicehash       = v.contains("is_nicehash") ?
+                                         atoi(v.at("is_nicehash").c_str()) : 0;
 
   if (is_no_same_input && new_input_hex == m_input_hex) throw std::string("Ignore duplicate job");
   auto batch_parts = tokenize(new_dev_str, '*');
@@ -160,9 +170,10 @@ void Core::set_job(
 
   if (new_dev == DEV::C29_GPU && new_batch != 1)
     throw std::string("Invalid batch size for c29s algo. Should be 1.");
+  if (new_nonce_bytes != 4 && new_nonce_bytes != 8)
+    throw std::string("Only support 4 or 8 bytes long nonces");
 
   FN new_fn;
-  unsigned new_nonce_offset;
   uint8_t new_seed[HASH_LEN];
   const RandomX_ConfigurationBase* new_rx_config;
   switch (new_dev) {
@@ -173,7 +184,6 @@ void Core::set_job(
       if (new_algo == xmrig::Algorithm::GHOSTRIDER_RTM) {
         if (new_batch != 8) throw std::string("Bad CPU batch");
         new_fn.cpu = ghostrider;
-        new_nonce_offset = 76;
       } else {
         if (new_batch > MAX_CN_CPU_WAYS) throw std::string("Bad CPU batch");
         new_fn.cpu = xmrig::CnHash::fn(
@@ -181,7 +191,6 @@ void Core::set_job(
           cpu_params2variant[new_batch - 1][ci.hasAES() ? 0 : 1],
           xmrig::Assembly::AUTO
         );
-        new_nonce_offset = 39;
       }
       break;
     }
@@ -194,16 +203,20 @@ void Core::set_job(
       if (pi == rx_cpu_name2config.end()) throw std::string("Unsupported algo");
       new_rx_config = pi->second;
       new_fn.any = nullptr; // all work is done in the m_thread_pool
-      new_nonce_offset = 39;
       break;
     }
 
-    case DEV::GPU:
+    case DEV::GPU: {
+      const auto pi = gpu_cn_algo2fn.find(new_algo_str);
+      if (pi == gpu_cn_algo2fn.end()) throw std::string("Unsupported algo");
+      new_fn.gpu_cn = pi->second;
+      break;
+    }
+
     case DEV::C29_GPU: {
-      const auto pi = gpu_algo2fn.find(new_algo_str);
-      if (pi == gpu_algo2fn.end()) throw std::string("Unsupported algo");
-      new_fn.gpu = pi->second;
-      new_nonce_offset = new_dev == DEV::GPU ? 39 : (new_input_hex.size() >> 1) - 4;
+      const auto pi = gpu_c29_algo2fn.find(new_algo_str);
+      if (pi == gpu_c29_algo2fn.end()) throw std::string("Unsupported algo");
+      new_fn.gpu_c29 = pi->second;
       break;
     }
   }
@@ -271,7 +284,7 @@ void Core::set_job(
       // recreate vms
       if (m_vm == nullptr) {
         m_vm = new randomx_vm*[new_batch];
-        for (int i = 0; i != new_batch; ++ i) {
+        for (unsigned i = 0; i != new_batch; ++ i) {
           m_vm[i] = randomx_create_vm(
             get_rx_vm_flags(m_is_rx_jit, m_rx_dataset, m_rx_dataset_mem), m_rx_cache, m_rx_dataset,
             m_lpads->scratchpad() + i * new_mem_size, 0
@@ -294,13 +307,15 @@ void Core::set_job(
     m_algo_str = new_algo_str;
   }
 
-  m_input_hex    = new_input_hex;
-  m_dev          = new_dev;
-  m_dev_str      = new_dev_str2;
-  m_height       = new_height;
-  m_nonce_offset = new_nonce_offset;
-  m_input_len    = new_input_len;
-  m_is_nicehash  = new_nicehash;
+  m_input_hex      = new_input_hex;
+  m_dev            = new_dev;
+  m_dev_str        = new_dev_str2;
+  m_height         = new_height;
+  m_nonce_bytes    = new_nonce_bytes;
+  m_nonce_offset   = new_nonce_offset;
+  m_c29_proof_size = new_c29_proof_size;
+  m_input_len      = new_input_len;
+  m_is_nicehash    = new_nicehash;
   fn_extra_setup();
 
   // start rx job compute threads
@@ -318,14 +333,14 @@ void Core::set_job(
           alignas(16) uint8_t  output[HASH_LEN];
           alignas(16) uint64_t temp_hash[8];
           uint32_t nonce = new_nonce + new_thread_id * m_batch + batch_id;
-          if (m_is_nicehash) nonce |= *get_nonce(new_input2, 0) & 0xFF000000;
+          if (m_is_nicehash) nonce |= *get_nonce32(new_input2, 0) & 0xFF000000;
           const unsigned nonce_step = new_thread_num * m_batch;
           unsigned hashrate_update_counter = HASHRATE_COUNTER_INTERVAL;
           memcpy(input, new_input2, m_input_len);
-          if (is_set_nonce) { *get_nonce(input, 0) = nonce; nonce += nonce_step; }
+          if (is_set_nonce) { *get_nonce32(input, 0) = nonce; nonce += nonce_step; }
           randomx_calculate_hash_first(m_vm[thread_id], temp_hash, input, m_input_len);
           while (job_ref == m_job_ref) { // continue until we get a new job
-            uint32_t* const pnonce = get_nonce(input, 0);
+            uint32_t* const pnonce = get_nonce32(input, 0);
             const uint32_t prev_nonce = nonce;
             *pnonce = (nonce += nonce_step);
             if (m_target && ( m_is_nicehash ? (prev_nonce & 0xFF000000) != (nonce & 0xFF000000) :
@@ -359,12 +374,21 @@ void Core::set_job(
       }
     );
   } else {
-    m_nonce = new_nonce + new_thread_id;
-    if (m_is_nicehash) m_nonce |= *get_nonce(new_input, 0) & 0xFF000000;
     m_nonce_step = new_thread_num;
-    for (unsigned i = 0; i != m_batch; ++i) {
+    for (unsigned i = 0; i != m_batch; ++i)
       memcpy(m_input + m_input_len*i, new_input, m_input_len);
-      if (is_set_nonce) { *get_nonce(i) = m_nonce; m_nonce += m_nonce_step; }
+    if (m_nonce_bytes == 4) {
+      m_nonce32 = new_nonce + new_thread_id;
+      if (m_is_nicehash) m_nonce32 |= *get_nonce32(new_input, 0) & 0xFF000000;
+      if (is_set_nonce) for (unsigned i = 0; i != m_batch; ++i) {
+        *get_nonce32(i) = m_nonce32; m_nonce32 += m_nonce_step;
+      }
+    } else {
+      m_nonce64 = new_nonce + new_thread_id;
+      if (m_is_nicehash) m_nonce64 |= *get_nonce64(new_input, 0) & 0xFF00000000000000;
+      if (is_set_nonce) for (unsigned i = 0; i != m_batch; ++i) {
+        *get_nonce64(i) = m_nonce64; m_nonce64 += m_nonce_step;
+      }
     }
   }
 }
@@ -377,11 +401,13 @@ void Core::get_algo_params(const MessageValues& v) {
                  cpu_threads = atoi(v.at("cpu_threads").c_str()),
                  cpu_l3cache = atoi(v.at("cpu_l3cache").c_str());
   const auto& cpu_algo_keys = std::views::keys(cpu_name2algo);
-  const auto& gpu_algo_keys = std::views::keys(gpu_algo2fn);
+  const auto& gpu_cn_algo_keys = std::views::keys(gpu_cn_algo2fn);
+  const auto& gpu_c29_algo_keys = std::views::keys(gpu_c29_algo2fn);
   const std::set<std::string> cpu_algos(cpu_algo_keys.begin(), cpu_algo_keys.end()),
-                              gpu_algos(gpu_algo_keys.begin(), gpu_algo_keys.end());
+                              gpu_cn_algos(gpu_cn_algo_keys.begin(), gpu_cn_algo_keys.end()),
+			      gpu_c29_algos(gpu_c29_algo_keys.begin(), gpu_c29_algo_keys.end());
   const std::map<std::string, std::string>& result_map = algo_params(
-    MAX_CN_CPU_WAYS, cpu_sockets, cpu_threads, cpu_l3cache, algo2mem, cpu_algos, gpu_algos
+    MAX_CN_CPU_WAYS, cpu_sockets, cpu_threads, cpu_l3cache, algo2mem, cpu_algos, gpu_cn_algos, gpu_c29_algos
   );
   MessageValues result;
   for (const auto& i : result_map) result[i.first] = i.second;

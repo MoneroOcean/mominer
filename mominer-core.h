@@ -10,20 +10,26 @@
 #include "consts.h"
 
 typedef void (*cn_any_hash_fun)();
-typedef void (*gpu_hash_fun)(
-  uint32_t job_id, uint32_t nonce_offset,
+typedef void (*gpu_cn_hash_fun)(
   const uint8_t* input, unsigned input_size, uint8_t* output,
-  void* Spads, uint32_t* pbatch, const std::string& dev_str
+  void* Spads, unsigned batch, const std::string& dev_str
+);
+typedef int (*gpu_c29_hash_fun)(
+  unsigned job_ref, unsigned c29_proof_size,
+  const uint8_t* input, unsigned input_size, uint8_t* output,
+  uint32_t* output_edges, uint64_t* pnonce, const std::string& dev_str
 );
 static_assert(
   sizeof(cn_any_hash_fun) == sizeof(xmrig::cn_hash_fun) &&
-  sizeof(cn_any_hash_fun) == sizeof(gpu_hash_fun),
+  sizeof(cn_any_hash_fun) == sizeof(gpu_cn_hash_fun) &&
+  sizeof(cn_any_hash_fun) == sizeof(gpu_c29_hash_fun),
   "Compute function pointers differ in size!"
 );
 union FN {
   cn_any_hash_fun    any;
   xmrig::cn_hash_fun cpu;
-  gpu_hash_fun       gpu;
+  gpu_cn_hash_fun    gpu_cn;
+  gpu_c29_hash_fun   gpu_c29;
 };
 enum DEV { CPU, RX_CPU, GPU, C29_GPU };
 
@@ -37,8 +43,10 @@ class Core: public AsyncWorker {
   void* m_spads;
   struct cryptonight_ctx** m_ctx;
   uint8_t *m_input, *m_output;
-  unsigned m_job_ref, m_height, m_batch, m_mem_size, m_input_len, m_nonce_step, m_nonce_offset;
-  uint32_t m_nonce; // next nonce that will be used in an input
+  unsigned m_job_ref, m_height, m_batch, m_mem_size, m_input_len, m_nonce_step,
+	   m_nonce_bytes, m_nonce_offset, m_c29_proof_size;
+  uint32_t m_nonce32; // next nonce that will be used in an input
+  uint64_t m_nonce64;
   uint64_t m_target, m_timestamp, m_hash_count;
   std::string m_algo_str, m_dev_str, m_seed_hex, m_input_hex, m_pool_id, m_worker_id, m_job_id;
   bool m_is_rx_jit, m_is_nicehash;
@@ -48,11 +56,17 @@ class Core: public AsyncWorker {
   randomx_vm** m_vm;
   std::mutex m_mutex_hashrate;
 
-  inline uint32_t* get_nonce(uint8_t* const input, const unsigned batch) {
+  inline uint32_t* get_nonce32(uint8_t* const input, const unsigned batch) {
     return reinterpret_cast<uint32_t*>(input + (batch * m_input_len) + m_nonce_offset);
   }
-  inline uint32_t* get_nonce(const unsigned batch = 0) {
-    return get_nonce(m_input, batch);
+  inline uint32_t* get_nonce32(const unsigned batch = 0) {
+    return get_nonce32(m_input, batch);
+  }
+  inline uint64_t* get_nonce64(uint8_t* const input, const unsigned batch) {
+    return reinterpret_cast<uint64_t*>(input + (batch * m_input_len) + m_nonce_offset);
+  }
+  inline uint64_t* get_nonce64(const unsigned batch = 0) {
+    return get_nonce64(m_input, batch);
   }
   // just check the most significant uint64_t value of the full 32-byte hash value
   inline const uint64_t* get_result(const uint8_t* const output, const unsigned batch) const {
@@ -70,7 +84,7 @@ class Core: public AsyncWorker {
     const std::string& value = std::string()
   );
   void send_error(const std::string& str);
-  void send_result(uint32_t nonce, const uint8_t* output, const uint32_t* edges = nullptr);
+  void send_result(uint64_t nonce, const uint8_t* output, const uint32_t* edges = nullptr, unsigned c29_proof_size = 32);
   void send_last_nonce(uint32_t nonce, const std::string& pool_id);
   void free_memory(
     const bool is_batch_changed    = true,
@@ -98,8 +112,8 @@ class Core: public AsyncWorker {
       m_lpads(nullptr), m_rx_cache_mem(nullptr), m_rx_dataset_mem(nullptr),
       m_spads(nullptr), m_ctx(nullptr), m_input(nullptr), m_output(nullptr),
       m_job_ref(0), m_height(0), m_batch(0), m_mem_size(0), m_input_len(0),
-      m_nonce_step(1), m_nonce_offset(39), m_nonce(0), m_target(0),
-      m_timestamp(0), m_hash_count(0),
+      m_nonce_step(1), m_nonce_bytes(4), m_nonce_offset(39), m_c29_proof_size(32),
+      m_nonce32(0), m_nonce64(0), m_target(0), m_timestamp(0), m_hash_count(0),
       m_is_rx_jit(true), m_is_nicehash(true), m_rx_cache(nullptr), m_rx_dataset(nullptr),
       m_thread_pool(nullptr), m_vm(nullptr)
   {

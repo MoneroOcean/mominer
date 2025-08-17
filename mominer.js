@@ -195,7 +195,7 @@ function set_job(job_json) {
   if (!last_job || last_job.algo !== algo || last_job.dev !== dev)
     h.recreate_threads(dev, messageHandler);
   const pool_id = global.opt.pool_ids.active;
-  const job = {
+  let job = {
     algo:        algo,
     dev:         dev,
     blob_hex:    job_json.blob ? job_json.blob : job_json.pre_pow + "00000000",
@@ -209,6 +209,25 @@ function set_job(job_json) {
     thread_num:  h.get_dev_threads(dev),
     pool_id:     pool_id,
   };
+  if (algo.startsWith("c29")) {
+    job.algo        = "c29";
+    job.proofsize   = job_json.proofsize ? job_json.proofsize : 32;
+    job.noncebytes  = job_json.noncebytes ? job_json.noncebytes : 4;
+    if (!job.nonceoffset) switch (algo) {
+	case "c29s":
+          job.blob_hex    = job_json.pre_pow + "00".repeat(job.noncebytes);
+          job.nonceoffset = job_json.pre_pow.length / 2;
+          break;
+        default:
+          job.blob_hex    = "00".repeat(job.noncebytes) + job_json.pre_pow;
+          job.nonceoffset = 0;
+    } else job.blob_hex = job_json.pre_pow;
+
+  } else {
+    job.noncebytes  = job_json.noncebytes ? job_json.noncebytes : 4;
+    job.blob_hex    = job_json.blob;
+    job.nonceoffset = job.nonceoffset ? job.nonceoffset : (algo == "ghostrider" ? 76 : 39);
+  }
   set_algo_msr(algo);
   h.messageWorkers({type: "job", job: last_job = job});
   return job;

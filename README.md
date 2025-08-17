@@ -17,7 +17,7 @@ is possible and WIP.
 # Supported algos
 
 * CPU: All xmrig miner CPU supported algos with similar performance
-* GPU: cn/gpu, c29s
+* GPU: cn/gpu, c29
 
 Miner supports algo switching if you connect it to algo switching pool like
 gulf.moneroocean.stream that auto switches to the most profitable algo.
@@ -58,7 +58,7 @@ gpu1z: Intel(R) oneAPI Unified Runtime over Level-Zero
 2025-08-15 03:41:29 Algo argon2/chukwa (cpu^16) hashrate: 47176.18 H/s (2924.74, 2944.24, 2957.45, 2959.64, 2926.74, 2957.95, 2920.69, 2968.90, 2973.97, 2926.45, 2939.24, 2945.95, 2964.64, 2971.97, 2941.95, 2951.69)
 2025-08-15 03:42:30 Algo argon2/chukwav2 (cpu^16) hashrate: 15572.80 H/s (987.34, 983.45, 974.40, 957.80, 968.28, 954.15, 984.42, 957.55, 972.34, 991.15, 966.51, 983.82, 975.24, 960.05, 985.85, 970.44)
 2025-08-15 03:43:30 Algo argon2/wrkz (cpu^16) hashrate: 72262.68 H/s (4534.94, 4551.35, 4510.76, 4517.18, 4532.76, 4540.76, 4472.43, 4521.40, 4510.61, 4545.59, 4503.59, 4537.11, 4491.26, 4470.26, 4533.68, 4489.02)
-2025-08-15 03:44:46 Algo c29s (gpu1*1) hashrate: 0.79 H/s (0.79)
+2025-08-15 03:44:46 Algo c29 (gpu1*1) hashrate: 0.79 H/s (0.79)
 2025-08-15 03:45:47 Algo cn-heavy/0 (cpu^4) hashrate: 287.71 H/s (71.52, 72.19, 71.48, 72.53)
 2025-08-15 03:46:47 Algo cn-heavy/tube (cpu^4) hashrate: 256.11 H/s (64.33, 63.91, 63.93, 63.93)
 2025-08-15 03:47:48 Algo cn-heavy/xhv (cpu^4) hashrate: 279.11 H/s (70.64, 69.47, 69.64, 69.37)

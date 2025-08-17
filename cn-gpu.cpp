@@ -281,10 +281,9 @@ inline void aes_round(
 }
 
 void cn_gpu(
-  uint32_t, uint32_t, const uint8_t* const inputs, const unsigned input_size, uint8_t* const output,
-  void* const Spads, uint32_t* const pbatch, const std::string& dev_str
+  const uint8_t* const inputs, const unsigned input_size, uint8_t* const output,
+  void* const Spads, const unsigned batch, const std::string& dev_str
 ) {
-  const unsigned batch = *pbatch;
   try {
     const auto exception_handler = [] (sycl::exception_list exceptions) {
       for (std::exception_ptr const& e : exceptions) {

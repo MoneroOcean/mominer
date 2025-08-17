@@ -113,15 +113,15 @@ void Core::send_error(const std::string& str) {
   send_msg("error", "message", str);
 }
 
-void Core::send_result(const uint32_t nonce, const uint8_t* const output, const uint32_t* const edges) {
+void Core::send_result(const uint64_t nonce, const uint8_t* const output, const uint32_t* const edges, const unsigned c29_proof_size) {
   MessageValues values;
-  char nonce_hex[sizeof(uint32_t)*2+1], hash_hex[HASH_LEN*2+1], edges_hex[C29_CYCLE_LEN*sizeof(uint32_t)*2+1];
+  char nonce_hex[sizeof(uint32_t)*2+1], hash_hex[HASH_LEN*2+1], edges_hex[c29_proof_size*sizeof(uint32_t)*2+1];
   snprintf(nonce_hex, sizeof(uint32_t)*2+1, "%08x", __builtin_bswap32(nonce));
   values["nonce"]     = nonce_hex;
   values["hash"]      = hash_bin2hex(output, hash_hex);
   if (edges) {
-    for (unsigned i = 0; i < C29_CYCLE_LEN; ++i) snprintf(edges_hex + i * sizeof(uint32_t)*2, sizeof(uint32_t)*2+1, "%08x", edges[i]);
-    edges_hex[C29_CYCLE_LEN * 8] = 0;
+    for (unsigned i = 0; i < c29_proof_size; ++i) snprintf(edges_hex + i * sizeof(uint32_t)*2, sizeof(uint32_t)*2+1, "%08x", edges[i]);
+    edges_hex[c29_proof_size * 8] = 0;
     values["edges"]   = edges_hex;
   }
   values["pool_id"]   = m_pool_id;
@@ -208,7 +208,7 @@ bool Core::process_message(const std::string& type, const MessageValues& v) {
 
     } else throw std::string("Bad target hex");
 
-    const uint32_t last_nonce = m_nonce;
+    const uint64_t last_nonce = m_nonce_bytes == 4 ? m_nonce32 : m_nonce64;
     const std::string prev_pool_id = m_pool_id;
     set_job(true, true, v, [&]() {
       m_target    = new_target;
@@ -224,8 +224,9 @@ bool Core::process_message(const std::string& type, const MessageValues& v) {
 
   } else if (type == "test") {
     set_job(false, false, v);
-    m_nonce  = 0;
-    m_target = 0;
+    m_nonce32 = 0;
+    m_nonce64 = 0;
+    m_target  = 0;
 
   } else if (type == "pause") {
     ++ m_job_ref; // to stop rx threads if any
@@ -302,7 +303,8 @@ bool Core::process_message(const std::string& type, const MessageValues& v) {
      return true;
 
   } else if (type == "close") {
-    if (m_nonce) send_last_nonce(m_nonce, m_pool_id);
+    const uint64_t last_nonce = m_nonce_bytes == 4 ? m_nonce32 : m_nonce64;
+    if (last_nonce) send_last_nonce(last_nonce, m_pool_id);
     free_memory();
     return false; // stop processing messages
 
@@ -379,17 +381,22 @@ void Core::Execute(const AsyncProgressQueueWorker<char>::ExecutionProgress& prog
     }
 
     if (m_fn.any) {
-      uint32_t output_len = m_batch;
+      int c29_sols;
+      uint64_t c29_nonce;
       try {
         switch (m_dev) {
           case DEV::CPU:
             m_fn.cpu(m_input, m_input_len, m_output, m_ctx, m_height);
             break;
-
           case DEV::GPU:
+	    m_fn.gpu_cn(m_input, m_input_len, m_output, m_spads, m_batch, m_dev_str);
+	    break;
           case DEV::C29_GPU:
-            m_fn.gpu(m_job_ref, m_nonce_offset, m_input, m_input_len, m_output,
-	             m_spads, &output_len, m_dev_str);
+	    c29_nonce = m_nonce_bytes == 4 ? *get_nonce32() : *get_nonce64();
+            c29_sols = m_fn.gpu_c29(
+	      m_job_ref, m_c29_proof_size, m_input, m_input_len, m_output,
+              static_cast<uint32_t*>(m_spads), &c29_nonce, m_dev_str
+	    );
             break;
 
           case DEV::RX_CPU: throw "Internal error: Unreachable code executed";
@@ -404,51 +411,78 @@ void Core::Execute(const AsyncProgressQueueWorker<char>::ExecutionProgress& prog
         continue;
       }
 
-      if (!m_nonce) { // test job
-	m_input_len = 0; // do not produce any more test jobs for async GPU code like in c29s
-	if (output_len != 0) {
-	  if (output_len != static_cast<uint32_t>(-1)) {
-            std::string result_hash_str;
-            for (unsigned i = 0; i != output_len; ++ i) {
-              if (i) result_hash_str += " ";
-              char hash[HASH_LEN*2+1];
-              result_hash_str += hash_bin2hex(hash, i);
-            }
-            send_msg("test", "result", result_hash_str);
-	    if (m_dev != DEV::C29_GPU) set_fn(nullptr); // no async solutions
-	  } else set_fn(nullptr); // found all async solutions
+      if (!m_nonce32 && !m_nonce64) { // test job
+	m_input_len = 0; // do not produce any more test jobs for async GPU code like in c29
+        if (m_dev == DEV::C29_GPU && c29_sols == -1) {
+          send_msg("test", "result", "EOL");
+	  set_fn(nullptr);
+	  continue;
+	}
+	if (m_dev != DEV::C29_GPU || c29_sols == 1) {
+          std::string result_hash_str;
+          for (unsigned i = 0; i != m_batch; ++ i) {
+            if (i) result_hash_str += " ";
+            char hash[HASH_LEN*2+1];
+            result_hash_str += hash_bin2hex(hash, i);
+          }
+          send_msg("test", "result", result_hash_str);
+	  if (m_dev != DEV::C29_GPU) set_fn(nullptr); // no async solutions anymore
 	}
         continue;
       }
 
       m_hash_count += m_batch; // here we do not need mutex since there are no threads
-      const uint32_t prev_nonce = m_nonce;
+      if (m_nonce_bytes == 4) {
+        const uint32_t prev_nonce = m_nonce32;
 
-      if (m_dev != DEV::C29_GPU) {
-        for (unsigned i = 0; i != output_len; ++i) {
-          uint32_t* const pnonce = get_nonce(i);
-          if (m_target && *get_result(i) < m_target)
-	    send_result(*pnonce, m_output + HASH_LEN * i);
-          *pnonce = m_nonce;
-          m_nonce += m_nonce_step;
+        if (m_dev != DEV::C29_GPU) {
+          for (unsigned i = 0; i != m_batch; ++i) {
+            uint32_t* const pnonce = get_nonce32(i);
+            if (m_target && *get_result(i) < m_target)
+              send_result(*pnonce, m_output + HASH_LEN * i);
+            *pnonce = m_nonce32;
+            m_nonce32 += m_nonce_step;
+          }
+        } else {
+          if (c29_sols == 1 && m_target && *get_result() < m_target)
+            send_result(c29_nonce, m_output, static_cast<uint32_t*>(m_spads), m_c29_proof_size);
+          *get_nonce32() = m_nonce32;
+          m_nonce32 += m_nonce_step;
         }
-      } else {
-        if (output_len && m_target && *get_result() < m_target)
-          // for C29 algo we pass input nonce (needed since it is from older c29s call) and solution graph edges via m_spads
-          send_result(*static_cast<uint32_t*>(m_spads), m_output,
-            static_cast<uint32_t*>(m_spads) + 1
-          );
-        *get_nonce() = m_nonce;
-        m_nonce += m_nonce_step;
-      }
 
-      if (m_target && ( m_is_nicehash ? (prev_nonce & 0xFF000000) != (m_nonce & 0xFF000000) :
-                        prev_nonce > m_nonce )
-      ) {
-        send_error("Nonce overflow");
-        set_fn(nullptr);
-        continue;
-      }
+        if (m_target && ( m_is_nicehash ? (prev_nonce & 0xFF000000) != (m_nonce32 & 0xFF000000) :
+                          prev_nonce > m_nonce32 )
+        ) {
+          send_error("Nonce overflow");
+          set_fn(nullptr);
+          continue;
+        }
+     } else {
+        const uint64_t prev_nonce = m_nonce64;
+
+        if (m_dev != DEV::C29_GPU) {
+          for (unsigned i = 0; i != m_batch; ++i) {
+            uint64_t* const pnonce = get_nonce64(i);
+            if (m_target && *get_result(i) < m_target)
+              send_result(*pnonce, m_output + HASH_LEN * i);
+            *pnonce = m_nonce64;
+            m_nonce64 += m_nonce_step;
+          }
+        } else {
+          if (c29_sols == 1 && m_target && *get_result() < m_target)
+            send_result(c29_nonce, m_output, static_cast<uint32_t*>(m_spads), m_c29_proof_size);
+          *get_nonce64() = m_nonce64;
+          m_nonce64 += m_nonce_step;
+        }
+
+        if (m_target && ( m_is_nicehash ? (prev_nonce & 0xFF00000000000000) != (m_nonce64 & 0xFF00000000000000) :
+                          prev_nonce > m_nonce64 )
+        ) {
+          send_error("Nonce overflow");
+          set_fn(nullptr);
+          continue;
+        }
+     }
 
     } else {
       std::this_thread::sleep_for(std::chrono::milliseconds(100));

@@ -1,6 +1,6 @@
 // Copyright GNU GPLv3 (c) 2025-2025 MoneroOcean <support@moneroocean.stream>
 
-// SYCL c29s miner prototype based on Grin GPU Miner (https://github.com/swap-dev/SwapReferenceMiner)
+// SYCL c29 miner prototype based on Grin GPU Miner (https://github.com/swap-dev/SwapReferenceMiner)
 // OpenCL mining code by Jiri Photon Vadura and John Tromp
 
 #include <sycl/sycl.hpp>
@@ -38,8 +38,8 @@ const constexpr uint32_t BUCKET_STEP            = 32;
 // Global solution management
 static std::list<std::vector<sycl::uint2>> global_solutions;
 static std::list<std::vector<uint64_t>> global_seeds;
-static std::list<uint32_t> global_job_ids;
-static std::list<uint32_t> global_nonces;
+static std::list<unsigned> global_job_refs;
+static std::list<uint64_t> global_nonces;
 static std::mutex global_solutions_mutex;
 static std::atomic<uint32_t> running_search_threads{0};
 
@@ -93,7 +93,7 @@ static void reverse_path(
 // Main function to find cycles in trimmed graph - returns all valid 32-cycles
 static std::list<std::vector<sycl::uint2>> find_cycles(
     const std::vector<sycl::uint2>& trimmed_edges,
-    const uint32_t target_cycle_length = C29_CYCLE_LEN) {
+    const uint32_t target_cycle_length) {
 
   const uint32_t edge_count = trimmed_edges.size();
 
@@ -179,10 +179,11 @@ static std::list<std::vector<sycl::uint2>> find_cycles(
   };
 
 // Worker function that performs GPU trimming and cycle finding in separate thread
-static void start_new_c29s_solution_search(const uint64_t seed_k0, const uint64_t seed_k1,
-                                           const uint64_t seed_k2, const uint64_t seed_k3,
-					   const uint32_t job_id,  const uint32_t nonce,
-                                           sycl::queue& compute_queue) {
+static void start_new_c29_solution_search(const uint64_t seed_k0, const uint64_t seed_k1,
+                                          const uint64_t seed_k2, const uint64_t seed_k3,
+                                          const unsigned job_ref, const uint64_t nonce,
+                                          const unsigned c29_proof_size,
+                                          sycl::queue& compute_queue) {
   try {
     static auto kernel_bundle = sycl::get_kernel_bundle<sycl::bundle_state::executable>(compute_queue.get_context());
 
@@ -640,7 +641,7 @@ static void start_new_c29s_solution_search(const uint64_t seed_k0, const uint64_
     // Start new thread for solution search
     std::thread([=]() {
       // Find 32-cycles in trimmed graph
-      const std::list<std::vector<sycl::uint2>> solutions = find_cycles(trimmed_edges, C29_CYCLE_LEN);
+      const std::list<std::vector<sycl::uint2>> solutions = find_cycles(trimmed_edges, c29_proof_size);
 
       // Thread-safe update of global solutions list
       if (!solutions.empty()) {
@@ -648,7 +649,7 @@ static void start_new_c29s_solution_search(const uint64_t seed_k0, const uint64_
         for (const auto& solution : solutions) {
           global_solutions.push_back(solution);
 	  global_seeds.push_back(std::vector<uint64_t>{seed_k0, seed_k1, seed_k2, seed_k3});
-	  global_job_ids.push_back(job_id);
+	  global_job_refs.push_back(job_ref);
 	  global_nonces.push_back(nonce);
 	}
       }
@@ -664,10 +665,10 @@ static void start_new_c29s_solution_search(const uint64_t seed_k0, const uint64_
 
 extern int (*rx_blake2b)(void* out, const size_t outlen, const void* in, const size_t inlen);
 
-void c29s(const uint32_t job_id, const uint32_t nonce_offset,
-	  const uint8_t* const input, const uint32_t input_size,
-          uint8_t* const output, void* const output_nonces,
-          uint32_t* const pbatch, const std::string& dev_str) {
+int c29(const unsigned job_ref, const unsigned c29_proof_size,
+        const uint8_t* const input, const unsigned input_size,
+        uint8_t* const output, uint32_t* const output_edges,
+        uint64_t* const pnonce, const std::string& dev_str) {
 
   try {
     const auto exception_handler = [] (sycl::exception_list exceptions) {
@@ -695,20 +696,20 @@ void c29s(const uint32_t job_id, const uint32_t nonce_offset,
     bool has_solution = false;
     std::vector<sycl::uint2> solution;
     std::vector<uint64_t> solution_seed;
-    uint32_t solution_job_id;
-    uint32_t solution_nonce;
+    unsigned solution_job_ref;
+    uint64_t solution_nonce;
 
     { std::lock_guard<std::mutex> lock(global_solutions_mutex);
       while (!global_solutions.empty()) {
-	solution        = global_solutions.front();
-        solution_seed   = global_seeds.front();
-	solution_job_id = global_job_ids.front();
-	solution_nonce  = global_nonces.front();
+	solution         = global_solutions.front();
+        solution_seed    = global_seeds.front();
+	solution_job_ref = global_job_refs.front();
+	solution_nonce   = global_nonces.front();
         global_solutions.pop_front();
         global_seeds.pop_front();
-	global_job_ids.pop_front();
+	global_job_refs.pop_front();
 	global_nonces.pop_front();
-	if (solution_job_id == job_id) { // drop old job solutions
+	if (solution_job_ref == job_ref) { // drop old job solutions
           has_solution = true;
 	  break;
 	}
@@ -719,12 +720,12 @@ void c29s(const uint32_t job_id, const uint32_t nonce_offset,
     if (has_solution) {
       // Convert cycle edges to 64-bit format for recovery kernel
       std::vector<uint64_t> recovery_edges;
-      recovery_edges.reserve(C29_CYCLE_LEN);
+      recovery_edges.reserve(c29_proof_size);
       for (const auto& edge : solution) recovery_edges.push_back(static_cast<uint64_t>(edge.y()) << 32 | edge.x());
       const uint64_t k0 = solution_seed[0], k1 = solution_seed[1], k2 = solution_seed[2], k3 = solution_seed[3];
 
       // Create SYCL buffers for edge recovery
-      sycl::buffer<uint64_t, 1> buffer_edges{recovery_edges.data(), sycl::range<1>{C29_CYCLE_LEN}};
+      sycl::buffer<uint64_t, 1> buffer_edges{recovery_edges.data(), sycl::range<1>{c29_proof_size}};
       sycl::buffer<uint32_t, 1> buffer_nonces{sycl::range<1>{32}};
 
       // FluffyRecovery kernel - find nonces that generate solution edges
@@ -798,8 +799,8 @@ void c29s(const uint32_t job_id, const uint32_t nonce_offset,
       std::sort(nonces.begin(), nonces.end());
 
       // Pack nonces into bitstream (EDGE_BITS bits per nonce)
-      const constexpr uint32_t packed_len = C29_CYCLE_LEN * EDGE_BITS / 8;
-      uint8_t packed[packed_len] = {0};
+      const uint32_t packed_len = c29_proof_size * EDGE_BITS / 8;
+      std::vector<uint8_t> packed(packed_len, 0);
       uint32_t bit_pos = 0;
 
       for (const uint32_t nonce : nonces) {
@@ -814,25 +815,22 @@ void c29s(const uint32_t job_id, const uint32_t nonce_offset,
       }
 
       // Generate proof hash by hashing packed solution
-      rx_blake2b(output, C29_CYCLE_LEN, packed, packed_len);
+      rx_blake2b(output, c29_proof_size, packed.data(), packed_len);
 
       // Store nput nonce and edge nonces in edge output buffer
-      *static_cast<uint32_t*>(output_nonces) = solution_nonce;
-      std::memcpy(static_cast<uint32_t*>(output_nonces) + 1, nonces.data(), C29_CYCLE_LEN * sizeof(uint32_t));
+      *pnonce = solution_nonce;
+      std::memcpy(output_edges, nonces.data(), c29_proof_size * sizeof(uint32_t));
 
-      *pbatch = 1; // Update solution count
+      return 1; // Update solution count
 
     } else if (input_size) { // Start new solution search thread
       union { uint8_t blake_output[32]; uint64_t k[4]; };
       rx_blake2b(blake_output, 32, input, input_size);
-      start_new_c29s_solution_search(
-        k[0], k[1], k[2], k[3], job_id,
-	*reinterpret_cast<const uint32_t*>(input + nonce_offset), compute_queue
-      );
-      *pbatch = 0; // No immediate results
+      start_new_c29_solution_search(k[0], k[1], k[2], k[3], job_ref, *pnonce, c29_proof_size, compute_queue);
+      return 0; // No immediate results
 
     } else { // Check if any threads are still running and return -1 if not more solutions are expected
-      *pbatch = running_search_threads.load() == 0 ? static_cast<uint32_t>(-1) : 0;
+      return running_search_threads.load() == 0 ? -1 : 0;
     }
 
   } catch (const sycl::exception& e) {
