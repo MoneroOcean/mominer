@@ -209,19 +209,20 @@ function set_job(job_json) {
     thread_num:  h.get_dev_threads(dev),
     pool_id:     pool_id,
   };
-  if (algo.startsWith("c29")) {
+  if (algo.startsWith("c29") || algo === "cuckaroo") {
     job.algo        = "c29";
     job.proofsize   = job_json.proofsize ? job_json.proofsize : 32;
     job.noncebytes  = job_json.noncebytes ? job_json.noncebytes : 4;
-    if (!job.nonceoffset) switch (algo) {
-	case "c29s":
-          job.blob_hex    = job_json.pre_pow + "00".repeat(job.noncebytes);
-          job.nonceoffset = job_json.pre_pow.length / 2;
-          break;
-        default:
-          job.blob_hex    = "00".repeat(job.noncebytes) + job_json.pre_pow;
-          job.nonceoffset = 0;
-    } else job.blob_hex = job_json.pre_pow;
+    if (job_json.nonceoffset === undefined || job_json.nonceoffset === null) {
+      job.blob_hex    = job_json.pre_pow + "00".repeat(job.noncebytes);
+      job.nonceoffset = job_json.pre_pow.length / 2;
+    } else if (job_json.nonceoffset === 0 || job_json.nonceoffset === "0") {
+      job.blob_hex    = "00".repeat(job.noncebytes) + job_json.pre_pow;
+      job.nonceoffset = 0;
+    } else {
+      job.blob_hex    = job_json.pre_pow;
+      job.nonceoffset = parseInt(job_json.nonceoffset, 10);
+    }
 
   } else {
     job.noncebytes  = job_json.noncebytes ? job_json.noncebytes : 4;
