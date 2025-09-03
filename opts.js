@@ -5,7 +5,7 @@
 const path = require("path");
 const h    = require(path.join(__dirname, 'helper.js'));
 
-const version_str = "0.3.1";
+const version_str = "0.3.2";
 
 module.exports.agent_str = "MoMiner v" + version_str;
 
