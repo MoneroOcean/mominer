@@ -90,7 +90,7 @@ static void reverse_path(
   }
 }
 
-// Main function to find cycles in trimmed graph - returns all valid 32-cycles
+// Main function to find cycles in trimmed graph - returns all valid target_cycle_length-cycles
 static std::list<std::vector<sycl::uint2>> find_cycles(
     const std::vector<sycl::uint2>& trimmed_edges,
     const uint32_t target_cycle_length) {
@@ -640,7 +640,7 @@ static void start_new_c29_solution_search(const uint64_t seed_k0, const uint64_t
 
     // Start new thread for solution search
     std::thread([=]() {
-      // Find 32-cycles in trimmed graph
+      // Find c29_proof_size-cycles in trimmed graph
       const std::list<std::vector<sycl::uint2>> solutions = find_cycles(trimmed_edges, c29_proof_size);
 
       // Thread-safe update of global solutions list
@@ -726,13 +726,13 @@ int c29(const unsigned job_ref, const unsigned c29_proof_size,
 
       // Create SYCL buffers for edge recovery
       sycl::buffer<uint64_t, 1> buffer_edges{recovery_edges.data(), sycl::range<1>{c29_proof_size}};
-      sycl::buffer<uint32_t, 1> buffer_nonces{sycl::range<1>{32}};
+      sycl::buffer<uint32_t, 1> buffer_nonces{sycl::range<1>{c29_proof_size}};
 
       // FluffyRecovery kernel - find nonces that generate solution edges
       compute_queue.submit([&](sycl::handler& handler) {
         sycl::accessor acc_edges{buffer_edges, handler, sycl::read_only};
         sycl::accessor acc_nonces{buffer_nonces, handler, sycl::write_only, sycl::no_init};
-        sycl::local_accessor<uint32_t, 1> local_nonces{sycl::range<1>{32}, handler};
+        sycl::local_accessor<uint32_t, 1> local_nonces{sycl::range<1>{c29_proof_size}, handler};
 
         handler.use_kernel_bundle(kernel_bundle);
         handler.parallel_for(sycl::nd_range<1>(sycl::range<1>(2048 * 256), sycl::range<1>(256)),
@@ -741,7 +741,7 @@ int c29(const unsigned job_ref, const unsigned c29_proof_size,
           const uint32_t lid = item.get_local_id(0);
 
           // Initialize local memory for found nonces
-          if (lid < 32) local_nonces[lid] = 0;
+          if (lid < c29_proof_size) local_nonces[lid] = 0;
           item.barrier(sycl::access::fence_space::local_space);
 
 	  SIPHASH_ROUND_LAMBDA_MACRO
@@ -775,7 +775,7 @@ int c29(const unsigned job_ref, const unsigned c29_proof_size,
               const uint64_t edge_b = v | (u << 32);
 
               // Match against solution edges (both orientations)
-              for (uint32_t idx = 0; idx < 32; idx++) {
+              for (uint32_t idx = 0; idx < c29_proof_size; idx++) {
                 if (acc_edges[idx] == edge_a || acc_edges[idx] == edge_b)
                   local_nonces[idx] = base_nonce + s;
               }
@@ -785,21 +785,21 @@ int c29(const unsigned job_ref, const unsigned c29_proof_size,
           item.barrier(sycl::access::fence_space::local_space);
 
           // Write recovered nonces to global memory
-          if (lid < 32 && local_nonces[lid] > 0) acc_nonces[lid] = local_nonces[lid];
+          if (lid < c29_proof_size && local_nonces[lid] > 0) acc_nonces[lid] = local_nonces[lid];
         });
       });
 
       // Read recovered nonces from device
-      std::vector<uint32_t> nonces(32);
+      std::vector<uint32_t> nonces(c29_proof_size);
       { sycl::host_accessor acc{buffer_nonces, sycl::read_only};
-        std::memcpy(nonces.data(), acc.get_pointer(), 32 * sizeof(uint32_t));
+        std::memcpy(nonces.data(), acc.get_pointer(), c29_proof_size * sizeof(uint32_t));
       }
 
       // Sort nonces as required by Cuckaroo29 protocol
       std::sort(nonces.begin(), nonces.end());
 
       // Pack nonces into bitstream (EDGE_BITS bits per nonce)
-      const uint32_t packed_len = c29_proof_size * EDGE_BITS / 8;
+      const uint32_t packed_len = (c29_proof_size * EDGE_BITS + 7) / 8;
       std::vector<uint8_t> packed(packed_len, 0);
       uint32_t bit_pos = 0;
 
@@ -815,7 +815,10 @@ int c29(const unsigned job_ref, const unsigned c29_proof_size,
       }
 
       // Generate proof hash by hashing packed solution
-      rx_blake2b(output, c29_proof_size, packed.data(), packed_len);
+      rx_blake2b(output, 32, packed.data(), packed_len);
+
+      // Invert (reverse) bytes in place
+      for (int i = 0; i < 16; i++)  std::swap(output[i], output[31 - i]);
 
       // Store nput nonce and edge nonces in edge output buffer
       *pnonce = solution_nonce;
