@@ -166,7 +166,7 @@ void xmrig::keccakf(uint64_t st[25], int rounds)
 // compute a keccak hash (md) of given byte length from "in"
 typedef uint64_t state_t[25];
 
-
+#pragma clang optimize off // TODO: ICX bug here
 void xmrig::keccak(const uint8_t *in, int inlen, uint8_t *md, int mdlen)
 {
     state_t st;
@@ -200,3 +200,4 @@ void xmrig::keccak(const uint8_t *in, int inlen, uint8_t *md, int mdlen)
 
     memcpy(md, st, mdlen);
 }
+#pragma clang optimize on // TODO: ICX bug here

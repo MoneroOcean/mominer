@@ -114,13 +114,13 @@
       "-DNDEBUG -DHAVE_ROTR -DXMRIG_FEATURE_ASM "
       "-DXMRIG_ALGO_CN_LITE -DXMRIG_ALGO_CN_HEAVY -DXMRIG_ALGO_CN_PICO -DXMRIG_ALGO_CN_FEMTO "
       "-DXMRIG_ALGO_ARGON2 -DXMRIG_ALGO_GHOSTRIDER "
-      "-O3 -ffast-math -flto=thin -funroll-loops -fmerge-all-constants"
+      "-O3 -ffast-math -flto -funroll-loops -fmerge-all-constants"
     ],
     "cflags_cc+": [
       "-std=c++20"
     ],
     "libraries": [
-      "-fsycl -flto=thin /usr/local/lib/libsycl.so"
+      "-fsycl -flto"
     ],
     "dependencies": [ "sycl" ]
   },

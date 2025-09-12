@@ -1049,6 +1049,7 @@ fugue3_close(sph_fugue_context *sc, unsigned ub, unsigned n, void *dst)
 	sph_fugue384_init(sc);
 }
 
+#pragma clang optimize off // TODO: ICX bug here
 static void
 fugue4_close(sph_fugue_context *sc, unsigned ub, unsigned n, void *dst)
 {
@@ -1109,6 +1110,7 @@ fugue4_close(sph_fugue_context *sc, unsigned ub, unsigned n, void *dst)
 	sph_enc32be(out + 60, S[30]);
 //	sph_fugue512_init(sc);
 }
+#pragma clang optimize on // TODO: ICX bug here
 
 void
 sph_fugue224_init(void *cc)
