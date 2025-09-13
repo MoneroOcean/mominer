@@ -23,7 +23,7 @@ cd /root/mominer # su - resets to home dir and we need to keep /root/mominer pwd
 { ping -c1 -W2 8.8.8.8 >/dev/null 2>&1; } && npm update --silent || echo "Skip npm update since there is no internet access"\n\
 ( test -s ./build/Release/mominer.node || CC=icx CXX=icpx node-gyp configure ) &&\n\
 JOBS=$(nproc) CC=icx CXX=icpx MAKEFLAGS=-s node-gyp build --silent &&\n\
-{ test $# -eq 1; } && { echo "One param mode"; sudo LD_LIBRARY_PATH=$LD_LIBRARY_PATH -- /bin/bash -c ${*@Q}; } || sudo LD_LIBRARY_PATH=$LD_LIBRARY_PATH -- ${*@Q}\n\
+({ test $# -eq 1; } && { echo "One param mode"; sudo LD_LIBRARY_PATH=$LD_LIBRARY_PATH -- /bin/bash -c ${*@Q}; } || sudo LD_LIBRARY_PATH=$LD_LIBRARY_PATH -- ${*@Q})\n\
 EOF' >/root/entrypoint.sh &&\
 chmod +x /root/entrypoint.sh
 
