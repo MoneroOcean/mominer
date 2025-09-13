@@ -2,7 +2,7 @@
 
 tag=$1
 
-#./r.sh node test.js &&\
+./r.sh node test.js &&\
 (test -d deploy && rm -rf deploy || true) &&\
 mkdir deploy &&\
 docker create --name mominer mominer-build &&\
