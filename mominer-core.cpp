@@ -12,6 +12,7 @@
 #include "3rdparty/argon2.h"
 
 #include <chrono>
+#include <inttypes.h>
 
 static const xmrig::ICpuInfo& ci = *xmrig::Cpu::info();
 void (*rx_blake2b_compress)(blake2b_state* S, const uint8_t * block) = rx_blake2b_compress_integer;
@@ -113,26 +114,50 @@ void Core::send_error(const std::string& str) {
   send_msg("error", "message", str);
 }
 
-void Core::send_result(const uint64_t nonce, const uint8_t* const output, const uint32_t* const edges, const unsigned c29_proof_size) {
+void Core::send_result(const uint64_t nonce, const unsigned noncebytes, const uint8_t* const output,
+		       const uint32_t* const edges, const unsigned c29_proof_size) {
   MessageValues values;
-  char nonce_hex[sizeof(uint32_t)*2+1], hash_hex[HASH_LEN*2+1], edges_hex[c29_proof_size*sizeof(uint32_t)*2+1];
-  snprintf(nonce_hex, sizeof(uint32_t)*2+1, "%08x", __builtin_bswap32(nonce));
-  values["nonce"]     = nonce_hex;
-  values["hash"]      = hash_bin2hex(output, hash_hex);
-  if (edges) {
-    for (unsigned i = 0; i < c29_proof_size; ++i) snprintf(edges_hex + i * sizeof(uint32_t)*2, sizeof(uint32_t)*2+1, "%08x", edges[i]);
-    edges_hex[c29_proof_size * 8] = 0;
-    values["edges"]   = edges_hex;
+
+  // nonce hex
+  char nonce_hex[sizeof(uint64_t) * 2 + 1];
+  if (noncebytes == 4) {
+    snprintf(nonce_hex, sizeof(nonce_hex), "%08x", static_cast<uint32_t>(nonce));
+  } else {
+    snprintf(nonce_hex, sizeof(nonce_hex), "%016" PRIx64, nonce);
   }
+  values["nonce"] = nonce_hex;
+
+  // hash hex
+  char hash_hex[HASH_LEN * 2 + 1];
+  values["hash"] = hash_bin2hex(output, hash_hex);
+
+  // edges hex
+  if (edges) {
+    std::string edges_hex;
+    edges_hex.reserve(c29_proof_size * 8); // 8 hex chars per edge
+    char buf[9]; // enough for "%08x" + null
+    for (unsigned i = 0; i < c29_proof_size; ++i) {
+      snprintf(buf, sizeof(buf), "%08x", edges[i]);
+      edges_hex.append(buf);
+    }
+    values["edges"] = edges_hex;
+  }
+
   values["pool_id"]   = m_pool_id;
   values["worker_id"] = m_worker_id;
   values["job_id"]    = m_job_id;
   send_msg("result", values);
 }
 
-void Core::send_last_nonce(const uint32_t nonce, const std::string& pool_id) {
+void Core::send_last_nonce(const uint64_t nonce, const unsigned noncebytes, const std::string& pool_id) {
   MessageValues result;
-  result["nonce"]   = std::to_string(nonce);
+  char nonce_hex[sizeof(uint64_t)*2+1];
+  if (noncebytes == 4) {
+    snprintf(nonce_hex, noncebytes*2+1, "%08x", static_cast<uint32_t>(nonce));
+  } else {
+    snprintf(nonce_hex, noncebytes*2+1, "%016" PRIx64, nonce);
+  }
+  result["nonce"]   = nonce_hex;
   result["pool_id"] = pool_id;
   send_msg("last_nonce", result);
 }
@@ -216,7 +241,7 @@ bool Core::process_message(const std::string& type, const MessageValues& v) {
       m_worker_id = v.at("worker_id");
       m_job_id    = v.at("job_id");
     });
-    if (last_nonce) send_last_nonce(last_nonce, prev_pool_id);
+    if (last_nonce) send_last_nonce(last_nonce, m_nonce_bytes, prev_pool_id);
 
   } else if (type == "bench") {
     set_job(true, false, v);
@@ -304,7 +329,7 @@ bool Core::process_message(const std::string& type, const MessageValues& v) {
 
   } else if (type == "close") {
     const uint64_t last_nonce = m_nonce_bytes == 4 ? m_nonce32 : m_nonce64;
-    if (last_nonce) send_last_nonce(last_nonce, m_pool_id);
+    if (last_nonce) send_last_nonce(last_nonce, m_nonce_bytes, m_pool_id);
     free_memory();
     return false; // stop processing messages
 
@@ -392,7 +417,7 @@ void Core::Execute(const AsyncProgressQueueWorker<char>::ExecutionProgress& prog
 	    m_fn.gpu_cn(m_input, m_input_len, m_output, m_spads, m_batch, m_dev_str);
 	    break;
           case DEV::C29_GPU:
-	    c29_nonce = m_nonce_bytes == 4 ? *get_nonce32() : *get_nonce64();
+	    c29_nonce = m_nonce_bytes == 4 ? __builtin_bswap32(*get_nonce32()) : __builtin_bswap64(*get_nonce64());
             c29_sols = m_fn.gpu_c29(
 	      m_job_ref, m_c29_proof_size, m_input, m_input_len, m_output,
               static_cast<uint32_t*>(m_spads), &c29_nonce, m_dev_str
@@ -439,18 +464,19 @@ void Core::Execute(const AsyncProgressQueueWorker<char>::ExecutionProgress& prog
           for (unsigned i = 0; i != m_batch; ++i) {
             uint32_t* const pnonce = get_nonce32(i);
             if (m_target && *get_result(i) < m_target)
-              send_result(*pnonce, m_output + HASH_LEN * i);
+              send_result(__builtin_bswap32(*pnonce), 4, m_output + HASH_LEN * i);
             *pnonce = m_nonce32;
             m_nonce32 += m_nonce_step;
           }
         } else {
           if (c29_sols == 1 && m_target && *get_result() < m_target)
-            send_result(c29_nonce, m_output, static_cast<uint32_t*>(m_spads), m_c29_proof_size);
-          *get_nonce32() = m_nonce32;
+            send_result(c29_nonce, 4, m_output, static_cast<uint32_t*>(m_spads), m_c29_proof_size);
+          *get_nonce32() = __builtin_bswap32(m_nonce32);
           m_nonce32 += m_nonce_step;
         }
 
-        if (m_target && ( m_is_nicehash ? (prev_nonce & 0xFF000000) != (m_nonce32 & 0xFF000000) :
+	// check that current nonce is greater than previous one and nince hash protected nonce part is not changed
+        if (m_target && ( m_nicehash_mask ? (prev_nonce & static_cast<uint32_t>(m_nicehash_mask)) != (m_nonce32 & static_cast<uint32_t>(m_nicehash_mask)) :
                           prev_nonce > m_nonce32 )
         ) {
           send_error("Nonce overflow");
@@ -464,18 +490,19 @@ void Core::Execute(const AsyncProgressQueueWorker<char>::ExecutionProgress& prog
           for (unsigned i = 0; i != m_batch; ++i) {
             uint64_t* const pnonce = get_nonce64(i);
             if (m_target && *get_result(i) < m_target)
-              send_result(*pnonce, m_output + HASH_LEN * i);
+              send_result(__builtin_bswap64(*pnonce), 8, m_output + HASH_LEN * i);
             *pnonce = m_nonce64;
             m_nonce64 += m_nonce_step;
           }
         } else {
           if (c29_sols == 1 && m_target && *get_result() < m_target)
-            send_result(c29_nonce, m_output, static_cast<uint32_t*>(m_spads), m_c29_proof_size);
-          *get_nonce64() = m_nonce64;
+            send_result(c29_nonce, 8, m_output, static_cast<uint32_t*>(m_spads), m_c29_proof_size);
+          *get_nonce64() = __builtin_bswap64(m_nonce64);
           m_nonce64 += m_nonce_step;
         }
 
-        if (m_target && ( m_is_nicehash ? (prev_nonce & 0xFF00000000000000) != (m_nonce64 & 0xFF00000000000000) :
+	// check that current nonce is greater than previous one and nince hash protected nonce part is not changed
+        if (m_target && ( m_nicehash_mask ? (prev_nonce & m_nicehash_mask) != (m_nonce64 & m_nicehash_mask) :
                           prev_nonce > m_nonce64 )
         ) {
           send_error("Nonce overflow");

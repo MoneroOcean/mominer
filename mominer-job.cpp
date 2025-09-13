@@ -154,9 +154,8 @@ void Core::set_job(
                                          atoi(v.at("nonceoffset").c_str()) : 39,
 		    new_c29_proof_size = v.contains("proofsize") ?
                                          atoi(v.at("proofsize").c_str()) : 32;
-  const uint64_t    new_nonce          = v.contains("nonce") ? atoi(v.at("nonce").c_str()) : 0;
-  const bool        new_nicehash       = v.contains("is_nicehash") ?
-                                         atoi(v.at("is_nicehash").c_str()) : 0;
+  const uint64_t    new_nonce          = v.contains("nonce") ? strtoull(v.at("nonce").c_str(), NULL, 16) : 0,
+                    new_nicehash_mask  = v.contains("nicehash_mask") ? strtoull(v.at("nicehash_mask").c_str(), NULL, 16) : 0;
 
   if (is_no_same_input && new_input_hex == m_input_hex) throw std::string("Ignore duplicate job");
   auto batch_parts = tokenize(new_dev_str, '*');
@@ -315,7 +314,7 @@ void Core::set_job(
   m_nonce_offset   = new_nonce_offset;
   m_c29_proof_size = new_c29_proof_size;
   m_input_len      = new_input_len;
-  m_is_nicehash    = new_nicehash;
+  m_nicehash_mask  = new_nicehash_mask;
   fn_extra_setup();
 
   // start rx job compute threads
@@ -326,24 +325,25 @@ void Core::set_job(
     memcpy(new_input2, new_input, m_input_len);
     const unsigned job_ref = m_job_ref;
     for (unsigned batch_id = 0; batch_id != m_batch; ++batch_id) m_thread_pool->push(
-      [=, &m_job_ref = m_job_ref, &m_hash_count = m_hash_count, &unique_counter](int) {
+      [=, this, &m_job_ref = m_job_ref, &m_hash_count = m_hash_count, &unique_counter](int) {
         const int thread_id = unique_counter.fetch_add(1);
         try {
           alignas(16) uint8_t  input[MAX_BLOB_LEN];
           alignas(16) uint8_t  output[HASH_LEN];
           alignas(16) uint64_t temp_hash[8];
           uint32_t nonce = new_nonce + new_thread_id * m_batch + batch_id;
-          if (m_is_nicehash) nonce |= *get_nonce32(new_input2, 0) & 0xFF000000;
+          if (m_nicehash_mask) nonce |= __builtin_bswap32(*get_nonce32(new_input2, 0)) & static_cast<uint32_t>(m_nicehash_mask);
           const unsigned nonce_step = new_thread_num * m_batch;
           unsigned hashrate_update_counter = HASHRATE_COUNTER_INTERVAL;
           memcpy(input, new_input2, m_input_len);
-          if (is_set_nonce) { *get_nonce32(input, 0) = nonce; nonce += nonce_step; }
+          if (is_set_nonce) { *get_nonce32(input, 0) = __builtin_bswap32(nonce); nonce += nonce_step; }
           randomx_calculate_hash_first(m_vm[thread_id], temp_hash, input, m_input_len);
           while (job_ref == m_job_ref) { // continue until we get a new job
             uint32_t* const pnonce = get_nonce32(input, 0);
             const uint32_t prev_nonce = nonce;
-            *pnonce = (nonce += nonce_step);
-            if (m_target && ( m_is_nicehash ? (prev_nonce & 0xFF000000) != (nonce & 0xFF000000) :
+            *pnonce = __builtin_bswap32(nonce += nonce_step);
+	    // check that current nonce is greater than previous one and nince hash protected nonce part is not changed
+            if (m_target && ( m_nicehash_mask ? (prev_nonce & static_cast<uint32_t>(m_nicehash_mask)) != (nonce & static_cast<uint32_t>(m_nicehash_mask)) :
                               prev_nonce > nonce )
             ) {
               send_error("Nonce overflow");
@@ -362,10 +362,10 @@ void Core::set_job(
               m_mutex_hashrate.unlock();
             }
             if (m_target && *get_result(output, 0) < m_target)
-              send_result(nonce - nonce_step, output);
+              send_result(nonce - nonce_step, 4, output);
           }
           // only send for mine jobs
-          if (m_target) send_last_nonce(nonce, m_pool_id);
+          if (m_target) send_last_nonce(nonce, 4, m_pool_id);
         } catch(const std::string& err) {
           send_error(std::string("Compute function thread exception: ") + err);
         } catch(...) {
@@ -379,15 +379,15 @@ void Core::set_job(
       memcpy(m_input + m_input_len*i, new_input, m_input_len);
     if (m_nonce_bytes == 4) {
       m_nonce32 = new_nonce + new_thread_id;
-      if (m_is_nicehash) m_nonce32 |= *get_nonce32(new_input, 0) & 0xFF000000;
+      if (m_nicehash_mask) m_nonce32 |= __builtin_bswap32(*get_nonce32(new_input, 0)) & static_cast<uint32_t>(m_nicehash_mask);
       if (is_set_nonce) for (unsigned i = 0; i != m_batch; ++i) {
-        *get_nonce32(i) = m_nonce32; m_nonce32 += m_nonce_step;
+        *get_nonce32(i) = __builtin_bswap32(m_nonce32); m_nonce32 += m_nonce_step;
       }
     } else {
       m_nonce64 = new_nonce + new_thread_id;
-      if (m_is_nicehash) m_nonce64 |= *get_nonce64(new_input, 0) & 0xFF00000000000000;
+      if (m_nicehash_mask) m_nonce64 |= __builtin_bswap64(*get_nonce64(new_input, 0)) & m_nicehash_mask;
       if (is_set_nonce) for (unsigned i = 0; i != m_batch; ++i) {
-        *get_nonce64(i) = m_nonce64; m_nonce64 += m_nonce_step;
+        *get_nonce64(i) = __builtin_bswap64(m_nonce64); m_nonce64 += m_nonce_step;
       }
     }
   }

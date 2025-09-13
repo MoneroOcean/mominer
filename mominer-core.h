@@ -46,10 +46,9 @@ class Core: public AsyncWorker {
   unsigned m_job_ref, m_height, m_batch, m_mem_size, m_input_len, m_nonce_step,
 	   m_nonce_bytes, m_nonce_offset, m_c29_proof_size;
   uint32_t m_nonce32; // next nonce that will be used in an input
-  uint64_t m_nonce64;
-  uint64_t m_target, m_timestamp, m_hash_count;
+  uint64_t m_nonce64, m_nicehash_mask, m_target, m_timestamp, m_hash_count;
   std::string m_algo_str, m_dev_str, m_seed_hex, m_input_hex, m_pool_id, m_worker_id, m_job_id;
-  bool m_is_rx_jit, m_is_nicehash;
+  bool m_is_rx_jit;
   randomx_cache*   m_rx_cache;
   randomx_dataset* m_rx_dataset;
   ctpl::thread_pool* m_thread_pool;
@@ -84,8 +83,8 @@ class Core: public AsyncWorker {
     const std::string& value = std::string()
   );
   void send_error(const std::string& str);
-  void send_result(uint64_t nonce, const uint8_t* output, const uint32_t* edges = nullptr, unsigned c29_proof_size = 32);
-  void send_last_nonce(uint32_t nonce, const std::string& pool_id);
+  void send_result(uint64_t nonce, unsigned noncebytes, const uint8_t* output, const uint32_t* edges = nullptr, unsigned c29_proof_size = 32);
+  void send_last_nonce(uint64_t nonce, unsigned noncebytes, const std::string& pool_id);
   void free_memory(
     const bool is_batch_changed    = true,
     const bool is_mem_size_changed = true,
@@ -113,8 +112,8 @@ class Core: public AsyncWorker {
       m_spads(nullptr), m_ctx(nullptr), m_input(nullptr), m_output(nullptr),
       m_job_ref(0), m_height(0), m_batch(0), m_mem_size(0), m_input_len(0),
       m_nonce_step(1), m_nonce_bytes(4), m_nonce_offset(39), m_c29_proof_size(32),
-      m_nonce32(0), m_nonce64(0), m_target(0), m_timestamp(0), m_hash_count(0),
-      m_is_rx_jit(true), m_is_nicehash(true), m_rx_cache(nullptr), m_rx_dataset(nullptr),
+      m_nonce32(0), m_nonce64(0), m_nicehash_mask(0), m_target(0), m_timestamp(0),
+      m_hash_count(0), m_is_rx_jit(true),m_rx_cache(nullptr), m_rx_dataset(nullptr),
       m_thread_pool(nullptr), m_vm(nullptr)
   {
     m_fn.any = nullptr;

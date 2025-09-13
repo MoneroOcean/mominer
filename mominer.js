@@ -116,8 +116,9 @@ function messageHandler(msg) {
         nonce: msg.value.nonce, result: msg.value.hash
       };
       if (msg.value.edges) {
-	params.nonce = parseInt(params.nonce, 16);
         params.pow = h.edge_hex2arr(msg.value.edges);
+	// for proofsize == 42 (Tari C29) we return nonce hex as usual
+	if (params.pow.length != 42) params.nonce = parseInt(params.nonce, 16);
       }
       p.pool_write(msg.value.pool_id, { jsonrpc: "2.0", id: 3, method: "submit", params: params });
       break;
@@ -127,10 +128,10 @@ function messageHandler(msg) {
       // pool_id can be "" for benchmark jobs. can not use === here since
       // global.opt.pool_ids.active is integer here
       if (pool_id === "" || pool_id == global.opt.pool_ids.active ||
-          !global.opt.pools[pool_id].last_job)  break;
+          !global.opt.pools[pool_id].last_job) break;
       const prev_nonce = global.opt.pools[pool_id].last_job.nonce;
-      const new_nonce  = parseInt(msg.value.nonce);
-      if (!prev_nonce || prev_nonce < new_nonce)
+      const new_nonce  = msg.value.nonce;
+      if (!prev_nonce || BigInt("0x" + prev_nonce) < BigInt("0x" + new_nonce))
         global.opt.pools[pool_id].last_job.nonce = new_nonce;
       break;
 
@@ -188,46 +189,61 @@ function set_algo_msr(algo) {
   }
 }
 
-function set_job(job_json) {
-  const algo = job_json.algo ? job_json.algo : global.opt.job.algo;
+// prev_job can be either job json from the pool or
+// previous job restored from the pool switch (with nonce that we need to take into account)
+function set_job(prev_job) {
+  let algo = prev_job.algo ? prev_job.algo : global.opt.job.algo;
+  if (algo.startsWith("c29") || algo === "cuckaroo") algo = "c29";
   const dev = algo in global.opt.algo_params && global.opt.algo_params[algo].dev ?
               global.opt.algo_params[algo].dev : global.opt.job.dev;
   if (!last_job || last_job.algo !== algo || last_job.dev !== dev)
     h.recreate_threads(dev, messageHandler);
   const pool_id = global.opt.pool_ids.active;
   let job = {
-    algo:        algo,
-    dev:         dev,
-    blob_hex:    job_json.blob ? job_json.blob : job_json.pre_pow + "00000000",
-    seed_hex:    job_json.seed_hash,
-    target:      job_json.target ? job_json.target : h.diff2target(job_json.difficulty),
-    worker_id:   job_json.id     ? job_json.id     : global.opt.pools[pool_id].worker_id,
-    job_id:      job_json.job_id ? job_json.job_id : "",
-    nonce:       job_json.nonce  ? job_json.nonce  : 0,
-    is_nicehash: global.opt.pools[pool_id].is_nicehash ? 1 : 0,
-    height:      job_json.height ? job_json.height : 0,
-    thread_num:  h.get_dev_threads(dev),
-    pool_id:     pool_id,
+    algo:       algo,
+    dev:        dev,
+    seed_hex:   prev_job.seed_hash ? prev_job.seed_hash : prev_job.seed_hex,
+    target:     prev_job.target ? prev_job.target : h.diff2target(prev_job.difficulty),
+    worker_id:  prev_job.id     ? prev_job.id     : (prev_job.worker_id ? prev_job.worker_id : global.opt.pools[pool_id].worker_id),
+    job_id:     prev_job.job_id ? prev_job.job_id : "",
+    nonce:      prev_job.nonce  ? prev_job.nonce  : 0,
+    height:     prev_job.height ? prev_job.height : 0,
+    thread_num: h.get_dev_threads(dev),
+    pool_id:    pool_id,
   };
-  if (algo.startsWith("c29") || algo === "cuckaroo") {
-    job.algo        = "c29";
-    job.proofsize   = job_json.proofsize ? job_json.proofsize : 32;
-    job.noncebytes  = job_json.noncebytes ? job_json.noncebytes : 4;
-    if (job_json.nonceoffset === undefined || job_json.nonceoffset === null) {
-      job.blob_hex    = job_json.pre_pow + "00".repeat(job.noncebytes);
-      job.nonceoffset = job_json.pre_pow.length / 2;
-    } else if (job_json.nonceoffset === 0 || job_json.nonceoffset === "0") {
-      job.blob_hex    = "00".repeat(job.noncebytes) + job_json.pre_pow;
+  if (algo === "c29") {
+    job.proofsize     = prev_job.proofsize ? prev_job.proofsize : 42;
+    if (prev_job.pre_pow) { // GRIN
+      job.noncebytes  = prev_job.noncebytes ? prev_job.noncebytes : 4;
+      job.blob_hex    = prev_job.pre_pow + "00".repeat(job.noncebytes);
+      job.nonceoffset = prev_job.pre_pow.length / 2;
+    } else if (prev_job.blob) { // TARI C29
+      job.noncebytes  = prev_job.noncebytes ? prev_job.noncebytes : 8;
+      job.blob_hex    = "00".repeat(job.noncebytes) + prev_job.blob;
       job.nonceoffset = 0;
     } else {
-      job.blob_hex    = job_json.pre_pow;
-      job.nonceoffset = parseInt(job_json.nonceoffset, 10);
+      job.noncebytes  = prev_job.noncebytes;
+      job.blob_hex    = prev_job.blob_hex;
+      job.nonceoffset = prev_job.nonceoffset;
     }
-
   } else {
-    job.noncebytes  = job_json.noncebytes ? job_json.noncebytes : 4;
-    job.blob_hex    = job_json.blob;
+    job.noncebytes  = prev_job.noncebytes ? prev_job.noncebytes : 4;
+    job.blob_hex    = prev_job.blob ? prev_job.blob : job.blob_hex;
     job.nonceoffset = job.nonceoffset ? job.nonceoffset : (algo == "ghostrider" ? 76 : 39);
+  }
+
+  if (prev_job.xn) { // we need to create nonce with xn prefix and update nicehash_mask to cover it
+    const nicehash_bytes = Math.ceil(prev_job.xn.length / 2);
+    job.nicehash_mask = Buffer.alloc(job.noncebytes, 0).fill(0xFF, 0, Math.min(nicehash_bytes, job.noncebytes)).toString("hex");
+    job.nonce = Buffer.concat([Buffer.from(prev_job.xn, "hex"), Buffer.alloc(job.noncebytes - nicehash_bytes, 0x00)]).toString("hex");
+  } else {
+    const last_job_can_be_used = last_job && last_job.algo === job.algo;
+    // use existing nicehash_mask or make a new one with FF00..00 that job.noncebytes long
+    job.nicehash_mask = prev_job.nicehash_mask ? prev_job.nicehash_mask : (
+      last_job_can_be_used && last_job.nicehash_mask ? last_job.nicehash_mask :
+      Buffer.alloc(job.noncebytes, 0).fill(0xFF, 0, global.opt.pools[pool_id].is_nicehash ? 1 : 0).toString("hex")
+    );
+    job.nonce = prev_job.nonce ? prev_job.nonce : (last_job_can_be_used && last_job.nonce ? last_job.nonce : "0");
   }
   set_algo_msr(algo);
   h.messageWorkers({type: "job", job: last_job = job});
