@@ -19,7 +19,7 @@ check_mac() {
 }
 
 check_linux() {
-  which cpuinfo >/dev/null && CPUINFO=$(cpuinfo) || CPUINFO=$(cat /proc/cpuinfo)
+  CPUINFO=$(cat /proc/cpuinfo)
   case "$1" in
     arm64)   uname -a | grep "aarch64" >/dev/null;;
     arm)     uname -a | grep "armv7"   >/dev/null;;

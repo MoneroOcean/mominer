@@ -119,8 +119,8 @@
     "cflags_cc+": [
       "-std=c++20"
     ],
-    "libraries": [
-      "-fsycl -flto"
+    "ldflags+": [
+      "-fsycl -flto -O3 -ffast-math -funroll-loops -fmerge-all-constants"
     ],
     "dependencies": [ "sycl" ]
   },
@@ -141,7 +141,7 @@
       '       echo "-march=native"'
       '     )'
       '   )',
-      "-std=c++20 -fsycl -DNDEBUG"
-    ]
+      "-std=c++20 -O3 -fsycl -DNDEBUG"
+    ],
   },
 ]}
