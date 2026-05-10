@@ -20,9 +20,6 @@
 #define XMRIG_MSRITEM_H
 
 
-#include "base/tools/String.h"
-
-
 #include <limits>
 #include <vector>
 #include <stdint.h>

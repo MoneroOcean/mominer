@@ -48,9 +48,12 @@
 .global DECL(randomx_program_loop_load_xop)
 .global DECL(randomx_program_start)
 .global DECL(randomx_program_read_dataset)
+.global DECL(randomx_program_read_dataset_v2)
 .global DECL(randomx_program_read_dataset_sshash_init)
 .global DECL(randomx_program_read_dataset_sshash_fin)
 .global DECL(randomx_program_loop_store)
+.global DECL(randomx_program_loop_store_hard_aes)
+.global DECL(randomx_program_loop_store_soft_aes)
 .global DECL(randomx_program_loop_end)
 .global DECL(randomx_dataset_init)
 .global DECL(randomx_dataset_init_avx2_prologue)
@@ -101,31 +104,31 @@ DECL(randomx_program_prologue):
 	movapd xmm15, xmmword ptr [scaleMask+rip]
 
 DECL(randomx_program_prologue_first_load):
+	sub rsp, 248
+	mov rdx, 0x1111111111111111
+	mov [rsp+232], rdx ;# aes_lut_enc
+	mov rdx, 0x1111111111111111
+	mov [rsp+240], rdx ;# aes_lut_dec
 	mov rdx, rax
 	and eax, RANDOMX_SCRATCHPAD_MASK
 	ror rdx, 32
 	and edx, RANDOMX_SCRATCHPAD_MASK
-	sub rsp, 40
+	nop
+	nop
+	nop
 	mov dword ptr [rsp], 0x9FC0
 	mov dword ptr [rsp+4], 0xBFC0
 	mov dword ptr [rsp+8], 0xDFC0
 	mov dword ptr [rsp+12], 0xFFC0
 	mov dword ptr [rsp+32], -1
-	nop
-	nop
-	nop
-  .byte 233 ;# 0xE9 = jmp
-  .int DECL(randomx_program_imul_rcp_store) - jump_offset1
-jump_offset1:
+	jmp DECL(randomx_program_imul_rcp_store)
 
 .balign 64
 	#include "asm/program_xmm_constants.inc"
 
 DECL(randomx_program_imul_rcp_store):
 	#include "asm/program_imul_rcp_store.inc"
-  .byte 233 ;# 0xE9 = jmp
-  .int DECL(randomx_program_loop_begin) - jump_offset2
-jump_offset2:
+	jmp DECL(randomx_program_loop_begin)
 
 .balign 64
 DECL(randomx_program_loop_begin):
@@ -143,6 +146,9 @@ DECL(randomx_program_start):
 DECL(randomx_program_read_dataset):
 	#include "asm/program_read_dataset.inc"
 
+DECL(randomx_program_read_dataset_v2):
+	#include "asm/program_read_dataset_v2.inc"
+
 DECL(randomx_program_read_dataset_sshash_init):
 	#include "asm/program_read_dataset_sshash_init.inc"
 
@@ -151,6 +157,12 @@ DECL(randomx_program_read_dataset_sshash_fin):
 
 DECL(randomx_program_loop_store):
 	#include "asm/program_loop_store.inc"
+
+DECL(randomx_program_loop_store_hard_aes):
+	#include "asm/program_loop_store_hard_aes.inc"
+
+DECL(randomx_program_loop_store_soft_aes):
+	#include "asm/program_loop_store_soft_aes.inc"
 
 DECL(randomx_program_loop_end):
 	nop
@@ -337,9 +349,7 @@ DECL(randomx_sshash_init):
 	xor r14, r8
 	mov r15, qword ptr [r7_add+rip]
 	xor r15, r8
-  .byte 233 ;# 0xE9 = jmp
-  .int DECL(randomx_program_end) - jump_offset3
-jump_offset3:
+	jmp DECL(randomx_program_end)
 
 .balign 64
 	#include "asm/program_sshash_constants.inc"

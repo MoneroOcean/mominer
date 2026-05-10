@@ -22,7 +22,6 @@
 
 #include <utility>
 #include <vector>
-#include <string.h>
 
 
 namespace xmrig {

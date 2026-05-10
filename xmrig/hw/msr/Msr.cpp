@@ -28,6 +28,7 @@ static std::weak_ptr<Msr> instance;
 
 } // namespace xmrig
 
+
 std::shared_ptr<xmrig::Msr> xmrig::Msr::get()
 {
     auto msr = instance.lock();

@@ -57,8 +57,8 @@
 namespace xmrig {
 
 
-constexpr size_t kCpuFlagsSize                                  = 15;
-static const std::array<const char *, kCpuFlagsSize> flagNames  = { "aes", "vaes", "avx", "avx2", "avx512f", "bmi2", "osxsave", "pdpe1gb", "sse2", "ssse3", "sse4.1", "xop", "popcnt", "cat_l3", "vm" };
+constexpr size_t kCpuFlagsSize                                  = 16;
+static const std::array<const char *, kCpuFlagsSize> flagNames  = { "aes", "vaes", "avx", "avx2", "avx512f", "bmi2", "osxsave", "pdpe1gb", "sse2", "ssse3", "sse4.1", "xop", "popcnt", "cat_l3", "vm", "rvv" };
 static_assert(kCpuFlagsSize == ICpuInfo::FLAG_MAX, "kCpuFlagsSize and FLAG_MAX mismatch");
 
 
@@ -249,7 +249,7 @@ xmrig::BasicCpuInfo::BasicCpuInfo() :
                     break;
 
                 case 0x19:
-                    if (m_model == 0x61) {
+                    if ((m_model == 0x61) || (m_model == 0x75)) {
                         m_arch = ARCH_ZEN4;
                         m_msrMod = MSR_MOD_RYZEN_19H_ZEN4;
                     }

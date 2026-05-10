@@ -50,6 +50,7 @@ protected:
     inline bool hasOneGbPages() const override                  { return has(FLAG_PDPE1GB); }
     inline bool hasXOP() const override                         { return has(FLAG_XOP); }
     inline bool isVM() const override                           { return has(FLAG_VM); }
+    inline bool hasRISCV_Vector() const override                { return has(FLAG_RISCV_VECTOR); }
     inline bool jccErratum() const override                     { return m_jccErratum; }
     inline const char *brand() const override                   { return m_brand; }
     inline const std::vector<int32_t> &units() const override   { return m_units; }
@@ -63,7 +64,7 @@ protected:
     inline Vendor vendor() const override                       { return m_vendor; }
     inline uint32_t model() const override
     {
-#   ifndef XMRIG_ARM
+#   if !defined(XMRIG_ARM) && !defined(XMRIG_RISCV)
         return m_model;
 #   else
         return 0;
@@ -78,7 +79,7 @@ protected:
     Vendor m_vendor         = VENDOR_UNKNOWN;
 
 private:
-#   ifndef XMRIG_ARM
+#   if !defined(XMRIG_ARM) && !defined(XMRIG_RISCV)
     uint32_t m_procInfo     = 0;
     uint32_t m_family       = 0;
     uint32_t m_model        = 0;

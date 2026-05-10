@@ -21,10 +21,9 @@
 #include "backend/cpu/Cpu.h"
 #include "base/tools/cryptonote/umul128.h"
 #include "crypto/common/VirtualMemory.h"
-#include <assert.h>
 
 
-#if defined(XMRIG_ARM)
+#if defined(XMRIG_ARM) || defined(XMRIG_RISCV)
 #   include "crypto/cn/CryptoNight_arm.h"
 #else
 #   include "crypto/cn/CryptoNight_x86.h"
