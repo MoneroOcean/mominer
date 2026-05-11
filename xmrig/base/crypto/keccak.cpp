@@ -166,6 +166,14 @@ void xmrig::keccakf(uint64_t st[25], int rounds)
 // compute a keccak hash (md) of given byte length from "in"
 typedef uint64_t state_t[25];
 
+// MOMINER PATCH BEGIN: ICX optimizes these byte-buffer word loads incorrectly under strict aliasing; keep the loads alias-safe without disabling optimization.
+#ifndef _MSC_VER
+typedef uint64_t uint64_t_alias __attribute__((__may_alias__));
+#else
+typedef uint64_t uint64_t_alias;
+#endif
+// MOMINER PATCH END
+
 
 void xmrig::keccak(const uint8_t *in, int inlen, uint8_t *md, int mdlen)
 {
@@ -180,7 +188,9 @@ void xmrig::keccak(const uint8_t *in, int inlen, uint8_t *md, int mdlen)
 
     for ( ; inlen >= rsiz; inlen -= rsiz, in += rsiz) {
         for (i = 0; i < rsizw; i++) {
-            st[i] ^= ((uint64_t *) in)[i];
+            // MOMINER PATCH BEGIN: Use alias-safe word loads matching uint64_t_alias above.
+            st[i] ^= ((uint64_t_alias *) in)[i];
+            // MOMINER PATCH END
         }
 
         xmrig::keccakf(st, KECCAK_ROUNDS);
@@ -193,7 +203,9 @@ void xmrig::keccak(const uint8_t *in, int inlen, uint8_t *md, int mdlen)
     temp[rsiz - 1] |= 0x80;
 
     for (i = 0; i < rsizw; i++) {
-        st[i] ^= ((uint64_t *) temp)[i];
+        // MOMINER PATCH BEGIN: Use alias-safe word loads matching uint64_t_alias above.
+        st[i] ^= ((uint64_t_alias *) temp)[i];
+        // MOMINER PATCH END
     }
 
     keccakf(st, KECCAK_ROUNDS);

@@ -42,6 +42,9 @@
 #include "crypto/cn/CryptoNight.h"
 #include "crypto/common/VirtualMemory.h"
 
+// MOMINER PATCH BEGIN: mominer's direct GhostRider build uses C string helpers here; include the standard declaration locally.
+#include <cstring>
+// MOMINER PATCH END
 #include <thread>
 #include <atomic>
 #include <uv.h>

@@ -22,6 +22,10 @@
 #include "base/tools/cryptonote/umul128.h"
 #include "crypto/common/VirtualMemory.h"
 
+// MOMINER PATCH BEGIN: mominer builds this translation unit directly, so include assert() here instead of relying on transitive headers.
+#include <cassert>
+// MOMINER PATCH END
+
 
 #if defined(XMRIG_ARM) || defined(XMRIG_RISCV)
 #   include "crypto/cn/CryptoNight_arm.h"

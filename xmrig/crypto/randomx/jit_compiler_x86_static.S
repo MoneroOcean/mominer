@@ -121,14 +121,22 @@ DECL(randomx_program_prologue_first_load):
 	mov dword ptr [rsp+8], 0xDFC0
 	mov dword ptr [rsp+12], 0xFFC0
 	mov dword ptr [rsp+32], -1
-	jmp DECL(randomx_program_imul_rcp_store)
+	;# MOMINER PATCH BEGIN: ICX integrated assembler needs a local offset anchor for this cross-section jump in mominer's LTO build.
+	.byte 233 ;# 0xE9 = jmp
+	.int DECL(randomx_program_imul_rcp_store) - jump_offset1
+jump_offset1:
+	;# MOMINER PATCH END
 
 .balign 64
 	#include "asm/program_xmm_constants.inc"
 
 DECL(randomx_program_imul_rcp_store):
 	#include "asm/program_imul_rcp_store.inc"
-	jmp DECL(randomx_program_loop_begin)
+	;# MOMINER PATCH BEGIN: ICX integrated assembler needs a local offset anchor for this cross-section jump in mominer's LTO build.
+	.byte 233 ;# 0xE9 = jmp
+	.int DECL(randomx_program_loop_begin) - jump_offset2
+jump_offset2:
+	;# MOMINER PATCH END
 
 .balign 64
 DECL(randomx_program_loop_begin):
@@ -349,7 +357,11 @@ DECL(randomx_sshash_init):
 	xor r14, r8
 	mov r15, qword ptr [r7_add+rip]
 	xor r15, r8
-	jmp DECL(randomx_program_end)
+	;# MOMINER PATCH BEGIN: ICX integrated assembler needs a local offset anchor for this cross-section jump in mominer's LTO build.
+	.byte 233 ;# 0xE9 = jmp
+	.int DECL(randomx_program_end) - jump_offset3
+jump_offset3:
+	;# MOMINER PATCH END
 
 .balign 64
 	#include "asm/program_sshash_constants.inc"
