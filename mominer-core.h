@@ -83,7 +83,11 @@ class Core: public AsyncWorker {
     const std::string& value = std::string()
   );
   void send_error(const std::string& str);
-  void send_result(uint64_t nonce, unsigned noncebytes, const uint8_t* output, const uint32_t* edges = nullptr, unsigned c29_proof_size = 32);
+  void send_result(
+    uint64_t nonce, unsigned noncebytes, const uint8_t* output,
+    const uint32_t* edges = nullptr, unsigned c29_proof_size = 32,
+    const uint8_t* commitment = nullptr
+  );
   void send_last_nonce(uint64_t nonce, unsigned noncebytes, const std::string& pool_id);
   void free_memory(
     const bool is_batch_changed    = true,

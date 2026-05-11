@@ -46,6 +46,7 @@ static const std::map<std::string, xmrig::Algorithm::Id> cpu_name2algo = {
   { "argon2/chukwav2", xmrig::Algorithm::AR2_CHUKWA_V2  },
   { "argon2/wrkz",     xmrig::Algorithm::AR2_WRKZ       },
   { "rx/0",            xmrig::Algorithm::RX_0           },
+  { "rx/2",            xmrig::Algorithm::RX_V2          },
   { "rx/wow",          xmrig::Algorithm::RX_WOW         },
   { "rx/arq",          xmrig::Algorithm::RX_ARQ         },
   { "rx/graft",        xmrig::Algorithm::RX_GRAFT       },
@@ -55,6 +56,7 @@ static const std::map<std::string, xmrig::Algorithm::Id> cpu_name2algo = {
 
 static const std::map<std::string, RandomX_ConfigurationBase*> rx_cpu_name2config = {
   { "rx/0",            &RandomX_MoneroConfig  },
+  { "rx/2",            &RandomX_MoneroConfigV2 },
   { "rx/wow",          &RandomX_WowneroConfig },
   { "rx/arq",          &RandomX_ArqmaConfig   },
   { "rx/graft",        &RandomX_GraftConfig   },
@@ -324,12 +326,15 @@ void Core::set_job(
     static uint8_t new_input2[MAX_BLOB_LEN];
     memcpy(new_input2, new_input, m_input_len);
     const unsigned job_ref = m_job_ref;
+    const bool is_rx_v2 = new_algo_str == "rx/2";
     for (unsigned batch_id = 0; batch_id != m_batch; ++batch_id) m_thread_pool->push(
       [=, this, &m_job_ref = m_job_ref, &m_hash_count = m_hash_count, &unique_counter](int) {
         const int thread_id = unique_counter.fetch_add(1);
         try {
           alignas(16) uint8_t  input[MAX_BLOB_LEN];
           alignas(16) uint8_t  output[HASH_LEN];
+          alignas(16) uint8_t  raw_hash[HASH_LEN];
+          alignas(16) uint8_t  prev_input[MAX_BLOB_LEN];
           alignas(16) uint64_t temp_hash[8];
           uint32_t nonce = new_nonce + new_thread_id * m_batch + batch_id;
           if (m_nicehash_mask) nonce |= __builtin_bswap32(*get_nonce32(new_input2, 0)) & static_cast<uint32_t>(m_nicehash_mask);
@@ -337,6 +342,7 @@ void Core::set_job(
           unsigned hashrate_update_counter = HASHRATE_COUNTER_INTERVAL;
           memcpy(input, new_input2, m_input_len);
           if (is_set_nonce) { *get_nonce32(input, 0) = __builtin_bswap32(nonce); nonce += nonce_step; }
+          if (is_rx_v2) memcpy(prev_input, input, m_input_len);
           randomx_calculate_hash_first(m_vm[thread_id], temp_hash, input, m_input_len);
           while (job_ref == m_job_ref) { // continue until we get a new job
             uint32_t* const pnonce = get_nonce32(input, 0);
@@ -350,6 +356,13 @@ void Core::set_job(
               break; // will also effectively stops this thread
             }
             randomx_calculate_hash_next(m_vm[thread_id], temp_hash, input, m_input_len, output);
+            const uint8_t* commitment = nullptr;
+            if (is_rx_v2) {
+              memcpy(raw_hash, output, HASH_LEN);
+              randomx_calculate_commitment(prev_input, m_input_len, raw_hash, output);
+              memcpy(prev_input, input, m_input_len);
+              commitment = raw_hash;
+            }
             if (!is_set_nonce) { // test job
               char hash[HASH_LEN*2+1];
               send_msg("test", "result", hash_bin2hex(output, hash));
@@ -362,7 +375,7 @@ void Core::set_job(
               m_mutex_hashrate.unlock();
             }
             if (m_target && *get_result(output, 0) < m_target)
-              send_result(nonce - nonce_step, 4, output);
+              send_result(nonce - nonce_step, 4, output, nullptr, 32, commitment);
           }
           // only send for mine jobs
           if (m_target) send_last_nonce(nonce, 4, m_pool_id);
@@ -413,4 +426,3 @@ void Core::get_algo_params(const MessageValues& v) {
   for (const auto& i : result_map) result[i.first] = i.second;
   send_msg("algo_params", result);
 }
-

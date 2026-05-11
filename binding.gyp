@@ -141,7 +141,7 @@
       '       echo "-march=native"'
       '     )'
       '   )',
-      "-std=c++20 -O3 -fsycl -DNDEBUG"
+      "-std=c++20 -O3 -fsycl -DNDEBUG -qopt-report=max -Rpass=loop-vectorize -Rpass-missed=loop-vectorize -Rpass-analysis=loop-vectorize"
     ],
   },
 ]}

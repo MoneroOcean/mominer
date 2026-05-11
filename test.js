@@ -60,6 +60,8 @@ function dup(str, n) { return Array(n).fill(str).join(' '); }
 let tests = [
   [ test, { algo: "rx/0", dev: "cpu*2", blob_hex: "5468697320697320612074657374" },
     dup("38f638606c730dd6f271d037556b83988c71acc6980e22e25271b22389ecfce6", 2)
+  ], [ test, { algo: "rx/2", dev: "cpu*2", blob_hex: "5468697320697320612074657374" },
+    dup("ad6eff4f6d8a301b40183174edb4cf72b85caa65e8e5616354c92a2607022712", 2)
   ], [ test, { algo: "rx/wow", dev: "cpu*2", blob_hex: "5468697320697320612074657374" },
     dup("15c9bd99b3180ab256e89beecaf7b693abb7cdb0d1dfe30020c72f0c70b904ce", 2)
   ], [ test, { algo: "rx/arq", dev: "cpu*2", blob_hex: "5468697320697320612074657374" },
@@ -159,4 +161,3 @@ repeat(function(cb_next) {
     process.exit(fail_count ? 1 : 0);
   }
 });
-

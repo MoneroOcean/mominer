@@ -114,8 +114,11 @@ void Core::send_error(const std::string& str) {
   send_msg("error", "message", str);
 }
 
-void Core::send_result(const uint64_t nonce, const unsigned noncebytes, const uint8_t* const output,
-		       const uint32_t* const edges, const unsigned c29_proof_size) {
+void Core::send_result(
+  const uint64_t nonce, const unsigned noncebytes, const uint8_t* const output,
+  const uint32_t* const edges, const unsigned c29_proof_size,
+  const uint8_t* const commitment
+) {
   MessageValues values;
 
   // nonce hex
@@ -130,6 +133,11 @@ void Core::send_result(const uint64_t nonce, const unsigned noncebytes, const ui
   // hash hex
   char hash_hex[HASH_LEN * 2 + 1];
   values["hash"] = hash_bin2hex(output, hash_hex);
+
+  if (commitment) {
+    char commitment_hex[HASH_LEN * 2 + 1];
+    values["commitment"] = hash_bin2hex(commitment, commitment_hex);
+  }
 
   // edges hex
   if (edges) {

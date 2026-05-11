@@ -115,6 +115,7 @@ function messageHandler(msg) {
         id: msg.value.worker_id, job_id: msg.value.job_id,
         nonce: msg.value.nonce, result: msg.value.hash
       };
+      if (msg.value.commitment) params.commitment = msg.value.commitment;
       if (msg.value.edges) {
         params.pow = h.edge_hex2arr(msg.value.edges);
 	// for proofsize == 42 (Tari C29) we return nonce hex as usual

@@ -252,6 +252,7 @@ static void start_new_c29_solution_search(const uint64_t seed_k0, const uint64_t
           uint64_t hash_block[EDGE_BLOCK_SIZE];
 
           // Generate SipHash values for block of nonces
+	  #pragma vector always
           for (uint32_t nonce_offset = 0; nonce_offset < EDGE_BLOCK_SIZE; nonce_offset++) {
             sip_v3 ^= base_nonce + nonce_offset;
             siphash_round(sip_v0, sip_v1, sip_v2, sip_v3);
@@ -688,7 +689,7 @@ int c29(const unsigned job_ref, const unsigned c29_proof_size,
     // Set optimal SYCL compiler flags for this algo
     static bool isFirstTime = true;
     if (isFirstTime) {
-      setenv("SYCL_PROGRAM_COMPILE_OPTIONS", "", 1);
+      setenv("SYCL_PROGRAM_COMPILE_OPTIONS", "-O3 -Rpass=loop-vectorize -Rpass-missed=loop-vectorize -Rpass-analysis=loop-vectorize", 1);
       isFirstTime = false;
     }
 
