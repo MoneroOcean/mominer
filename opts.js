@@ -174,6 +174,7 @@ Directives:
   mine  (<pool_address:port[tls]> <login> [<pass>]|<config.json>)
   test  <algo> <result_hash_hex_str>
   bench <algo>
+  algo_params
 
 Options:`;
   console.log(str);
@@ -257,4 +258,3 @@ module.exports.set_internal_opts = function(opt, opt_help) {
     }
   }
 };
-

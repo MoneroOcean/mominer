@@ -1,0 +1,111 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          package-manager-cache: false
+
+      - name: Setup Docker Buildx
+        uses: docker/setup-buildx-action@v3
+        with:
+          install: true
+
+      - name: Test
+        run: npm test
+
+  build-linux-x64:
+    needs: validate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          package-manager-cache: false
+
+      - name: Setup Docker Buildx
+        uses: docker/setup-buildx-action@v3
+        with:
+          install: true
+
+      - name: Build native addon in release image
+        run: ./r.sh node -e "console.log('mominer build ready')"
+
+      - name: Package release archive
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          root="mominer-v${version}"
+          archive="mominer-v${version}-linux-x64.tgz"
+          rm -rf release "$archive"
+          mkdir -p "release/$root"
+
+          docker rm -f mominer-release-lib >/dev/null 2>&1 || true
+          docker create --name mominer-release-lib mominer-build >/dev/null
+          libumf="$(docker export mominer-release-lib | tar -t | grep 'opt/intel/oneapi/.*/lib/libumf.so.0' | head -n1)"
+          docker cp -L "mominer-release-lib:$libumf" "release/$root/"
+          docker rm -f mominer-release-lib >/dev/null
+
+          cp mominer.js pool.js opts.js helper.js package.json README.md LICENSE deploy.dockerfile "release/$root/"
+          cp -r node_modules "release/$root/"
+          cp build/Release/mominer.node "release/$root/"
+
+          cat >"release/$root/docker-mominer.sh" <<'EOF'
+          #!/usr/bin/env bash
+          set -e
+          SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
+          if docker buildx version >/dev/null 2>&1; then
+            iid_file="$(mktemp)"
+            trap 'rm -f "$iid_file"' EXIT
+            docker buildx build --load --progress=none --iidfile "$iid_file" -t mominer-deploy -f "$SCRIPT_DIR/deploy.dockerfile" "$SCRIPT_DIR"
+          else
+            docker build -t mominer-deploy -f "$SCRIPT_DIR/deploy.dockerfile" "$SCRIPT_DIR"
+          fi
+          docker run --privileged --rm --name mominer-deploy --hostname mominer-deploy \
+            --mount "type=bind,source=$SCRIPT_DIR,target=/root/mominer" \
+            --workdir /root/mominer \
+            -it mominer-deploy node mominer.js "$@"
+          EOF
+          chmod +x "release/$root/docker-mominer.sh"
+
+          tar -C release -czf "$archive" "$root"
+
+      - name: Upload release artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: mominer-linux-x64
+          path: mominer-*-linux-x64.tgz
+
+      - name: Publish GitHub release
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >
+          gh release create "${GITHUB_REF_NAME}"
+          mominer-*-linux-x64.tgz
+          --title "${GITHUB_REF_NAME}"
+          --notes "MoMiner ${GITHUB_REF_NAME}"

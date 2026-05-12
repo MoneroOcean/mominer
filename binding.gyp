@@ -63,7 +63,7 @@
 
       "xmrig/3rdparty/fmt/format.cc",
 
-      '<!@(./test-cpu.sh x86_64 && ('
+      '<!@(./scripts/cpu-feature.sh x86_64 && ('
       '     echo "xmrig/backend/cpu/platform/BasicCpuInfo.cpp"'
       '     echo "xmrig/hw/msr/Msr.cpp"'
       '     echo "xmrig/hw/msr/Msr_linux.cpp"'
@@ -96,21 +96,21 @@
     "cflags!": [ "-O3" ],
     "cflags_cc!": [ "-std=gnu++1y", "-std=gnu++17", "-fno-exceptions" ],
     "cflags+": [
-      '<!@(./test-cpu.sh arm64 &&'
+      '<!@(./scripts/cpu-feature.sh arm64 &&'
       '     echo "-march=armv8-a+crypto -flax-vector-conversions" || ('
-      '       ./test-cpu.sh arm &&'
+      '       ./scripts/cpu-feature.sh arm &&'
       '       echo "-mfpu=neon -flax-vector-conversions" ||'
       '       echo "-march=native"'
       '     )'
       '   )',
-      '<!@(./test-cpu.sh avx512f && echo "-DHAVE_AVX512F" || echo)',
-      '<!@(./test-cpu.sh avx2    && echo "-DHAVE_AVX2 -DXMRIG_FEATURE_AVX2" || echo)',
-      '<!@(./test-cpu.sh xop     && echo "-DHAVE_XOP" || echo)',
-      '<!@(./test-cpu.sh sse4_1  && echo "-DXMRIG_FEATURE_SSE4_1" || echo)',
-      '<!@(./test-cpu.sh ssse3   && echo "-DHAVE_SSSE3" || echo)',
-      '<!@(./test-cpu.sh sse2    && echo "-DHAVE_SSE2" || echo)',
-      '<!@(./test-cpu.sh msr     && echo "-DXMRIG_FEATURE_MSR" || echo)',
-      '<!@(./test-cpu.sh vaes    && echo "-DHAVE_VAES" || echo)',
+      '<!@(./scripts/cpu-feature.sh avx512f && echo "-DHAVE_AVX512F" || echo)',
+      '<!@(./scripts/cpu-feature.sh avx2    && echo "-DHAVE_AVX2 -DXMRIG_FEATURE_AVX2" || echo)',
+      '<!@(./scripts/cpu-feature.sh xop     && echo "-DHAVE_XOP" || echo)',
+      '<!@(./scripts/cpu-feature.sh sse4_1  && echo "-DXMRIG_FEATURE_SSE4_1" || echo)',
+      '<!@(./scripts/cpu-feature.sh ssse3   && echo "-DHAVE_SSSE3" || echo)',
+      '<!@(./scripts/cpu-feature.sh sse2    && echo "-DHAVE_SSE2" || echo)',
+      '<!@(./scripts/cpu-feature.sh msr     && echo "-DXMRIG_FEATURE_MSR" || echo)',
+      '<!@(./scripts/cpu-feature.sh vaes    && echo "-DHAVE_VAES" || echo)',
       "-DNDEBUG -DHAVE_ROTR -DXMRIG_FEATURE_ASM "
       "-DXMRIG_ALGO_CN_LITE -DXMRIG_ALGO_CN_HEAVY -DXMRIG_ALGO_CN_PICO -DXMRIG_ALGO_CN_FEMTO "
       "-DXMRIG_ALGO_ARGON2 -DXMRIG_ALGO_GHOSTRIDER "
@@ -134,9 +134,9 @@
     "cflags!": [ "-O3" ],
     "cflags_cc!": [ "-fno-rtti", "-fno-exceptions", "-std=gnu++1y", "-std=gnu++17" ],
     "cflags+": [
-      '<!@(./test-cpu.sh arm64 &&'
+      '<!@(./scripts/cpu-feature.sh arm64 &&'
       '     echo "-march=armv8-a+crypto -flax-vector-conversions" || ('
-      '       ./test-cpu.sh arm &&'
+      '       ./scripts/cpu-feature.sh arm &&'
       '       echo "-mfpu=neon -flax-vector-conversions" ||'
       '       echo "-march=native"'
       '     )'

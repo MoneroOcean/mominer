@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
 set -e
 QUERY="$1"
@@ -14,7 +14,7 @@ check_mac() {
     avx512f) sysctl -n machdep.cpu.features | grep -i avx512f >/dev/null;;
     vaes)    sysctl -n machdep.cpu.features | grep -i vaes >/dev/null;;
     aes)     sysctl -n machdep.cpu.features | grep -i " aes" >/dev/null;;
-    *) echo "UNRECOGNISED CHECK $QUERY"; exit 1;;
+    *) echo "Unrecognized CPU feature check: $QUERY"; exit 1;;
   esac
 }
 
@@ -33,7 +33,7 @@ check_linux() {
     avx512f) grep avx512f  <<<$CPUINFO >/dev/null;;
     vaes)    grep vaes     <<<$CPUINFO >/dev/null;;
     aes)     grep " aes"   <<<$CPUINFO >/dev/null;;
-    *) echo "UNRECOGNISED CHECK $QUERY"; exit 1;;
+    *) echo "Unrecognized CPU feature check: $QUERY"; exit 1;;
   esac
 }
 
@@ -41,4 +41,3 @@ case "$(uname -a)" in
   Darwin*) check_mac   "$QUERY";;
   *)       check_linux "$QUERY";;
 esac
-

@@ -31,4 +31,4 @@ ENTRYPOINT ["/root/entrypoint.sh"]
 
 # sync user with host, build and run application
 WORKDIR /root/mominer
-CMD node test.js
+CMD node --require ./tests/common/test_output_buffer.js --test --test-reporter=./tests/common/spec_reporter.js --test-concurrency=1 tests/all.js

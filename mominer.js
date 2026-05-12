@@ -92,6 +92,9 @@ function parse_args() {
       global.opt.job.algo = args.shift();
       break;
 
+    case "algo_params":
+      break;
+
     default: return o.print_help("Unknown directive " + directive);
   }
 
@@ -380,5 +383,22 @@ switch (directive) {
       h.messageWorkers({type: "bench", job: last_job = global.opt.job});
     });
     compute_core.emit_to("read_msr", h.pack_msr(global.opt.default_msrs));
+    break;
+
+  case "algo_params":
+    compute_core = h.create_core();
+    compute_core.from.on("close", function() { process.exit(0); });
+    compute_core.from.on("algo_params", function(v) {
+      console.log("MOMINER_ALGO_PARAMS " + JSON.stringify(v));
+      exit(0);
+    });
+    compute_core.from.on("error", function(v) {
+      err_exit("Can't detect algo params: " + JSON.stringify(v.message ? v.message : v));
+    });
+    si.cpu(function(cpu) {
+      compute_core.emit_to("algo_params", {
+        cpu_sockets: cpu.processors, cpu_threads: cpu.cores, cpu_l3cache: cpu.cache.l3
+      });
+    });
     break;
 }
