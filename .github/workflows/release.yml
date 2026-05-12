@@ -10,7 +10,7 @@ permissions:
   contents: write
 
 env:
-  WINDOWS_ONEAPI_URL: https://www.intel.com/content/www/us/en/developer/tools/oneapi/oneapi-toolkit-download.html
+  ONEAPI_CI_WORKFLOW_URL: https://raw.githubusercontent.com/oneapi-src/oneapi-ci/master/.github/workflows/build_all.yml
   WINDOWS_ONEAPI_PACKAGE: intel-oneapi-toolkit
   WINDOWS_DPCPP_COMPONENTS: intel.oneapi.win.cpp-dpcpp-common
   ONEAPI_ROOT: C:/Program Files (x86)/Intel/oneAPI
@@ -118,12 +118,38 @@ jobs:
           node-version: 24
           package-manager-cache: false
 
+      - name: Resolve Intel oneAPI installer URL
+        id: resolve-oneapi
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          $url = & .github\workflows\scripts\resolve-oneapi-url.ps1 `
+            -DownloadPage "$env:ONEAPI_CI_WORKFLOW_URL" `
+            -PackageName "$env:WINDOWS_ONEAPI_PACKAGE" `
+            -IntelCiVariable "WINDOWS_TOOLKIT_URL"
+
+          $url = ($url | Select-Object -Last 1).Trim()
+          if (-not $url) {
+            throw "Failed to resolve Intel oneAPI installer URL"
+          }
+
+          Write-Host "Resolved Intel oneAPI installer URL: $url"
+          "WINDOWS_ONEAPI_URL=$url" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "url=$url" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+
+          $cacheKeyInput = "$url`n$env:WINDOWS_DPCPP_COMPONENTS"
+          $bytes = [System.Text.Encoding]::UTF8.GetBytes($cacheKeyInput)
+          $hashBytes = [System.Security.Cryptography.SHA256]::HashData($bytes)
+          $hash = [System.BitConverter]::ToString($hashBytes).Replace("-", "").ToLowerInvariant()
+          "cache-key=oneapi-windows-$hash" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+
       - name: Use oneAPI installation cache
         uses: actions/cache@v5
         id: cache-oneapi
         with:
           path: ${{ env.ONEAPI_ROOT }}
-          key: oneapi-windows-2026.0.0-toolkit-dpcpp-online
+          key: ${{ steps.resolve-oneapi.outputs.cache-key }}
 
       - name: Install Intel oneAPI
         if: steps.cache-oneapi.outputs.cache-hit != 'true'
