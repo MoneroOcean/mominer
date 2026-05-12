@@ -14,8 +14,15 @@ concurrency:
   group: stability-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  WINDOWS_ONEAPI_URL: https://www.intel.com/content/www/us/en/developer/tools/oneapi/oneapi-toolkit-download.html
+  WINDOWS_ONEAPI_PACKAGE: intel-oneapi-toolkit
+  WINDOWS_DPCPP_COMPONENTS: intel.oneapi.win.cpp-dpcpp-common
+  ONEAPI_ROOT: C:/Program Files (x86)/Intel/oneAPI
+  MOMINER_TEST_SYCL_CPU_GPU: "1"
+
 jobs:
-  test:
+  linux:
     name: Ubuntu / npm test
     runs-on: ubuntu-24.04
     timeout-minutes: 90
@@ -30,9 +37,6 @@ jobs:
           node-version: 24
           package-manager-cache: false
 
-      - name: Install npm dependencies
-        run: npm install --ignore-scripts --no-audit --no-fund
-
       - name: Setup Docker Buildx
         uses: docker/setup-buildx-action@v4
 
@@ -42,6 +46,46 @@ jobs:
           npm -v
           docker --version
           docker buildx version
+
+      - name: Run hash stability suite
+        run: npm test
+
+  windows:
+    name: Windows / npm test
+    runs-on: windows-2022
+    timeout-minutes: 90
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          package-manager-cache: false
+
+      - name: Use oneAPI installation cache
+        uses: actions/cache@v5
+        id: cache-oneapi
+        with:
+          path: ${{ env.ONEAPI_ROOT }}
+          key: oneapi-windows-2026.0.0-toolkit-dpcpp-online
+
+      - name: Install Intel oneAPI
+        if: steps.cache-oneapi.outputs.cache-hit != 'true'
+        shell: cmd
+        run: .github\workflows\scripts\install-oneapi.bat "%WINDOWS_ONEAPI_URL%" "%WINDOWS_DPCPP_COMPONENTS%" "%WINDOWS_ONEAPI_PACKAGE%"
+
+      - name: Build native addon
+        shell: cmd
+        run: |
+          call "%ONEAPI_ROOT%\setvars.bat" intel64 --force
+          node -v
+          npm -v
+          icx --version
+          npx --yes node-gyp@12.2.0 configure --msvs_version=2022
+          npx --yes node-gyp@12.2.0 build --msvs_version=2022 -- /p:PlatformToolset="Intel C++ Compiler 2026"
 
       - name: Run hash stability suite
         run: npm test

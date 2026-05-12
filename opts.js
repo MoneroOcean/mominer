@@ -3,7 +3,7 @@
 "use strict";
 
 const path = require("path");
-const h    = require(path.join(__dirname, 'helper.js'));
+const h    = require("./helper.js");
 
 const version_str = "0.4.0";
 
@@ -166,9 +166,11 @@ module.exports.print_opt_help = function(opt_help, depth_str, base_key_path_str)
 };
 
 module.exports.print_help = function(err_str) {
+  const exe = path.basename(process.argv[1] || "");
+  const command = exe === "mominer" || exe === "mominer.exe" ? "./" + exe : "node mominer.js";
   const str = `
 # Node.js/SYCL based CPU/GPU miner v${version_str}
-$ node mominer.js <directive> <parameter>+ [<option>+]
+$ ${command} <directive> <parameter>+ [<option>+]
 
 Directives:
   mine  (<pool_address:port[tls]> <login> [<pass>]|<config.json>)

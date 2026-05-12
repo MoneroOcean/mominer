@@ -100,7 +100,7 @@ char* Core::hash_bin2hex(char* const hash, const unsigned batch) const {
 void Core::send_msg(const std::string key, const MessageValues& values) {
   static std::mutex mutex_message;
   mutex_message.lock();
-  sendToNode(*m_progress, Message(key, values));
+  sendToNode(Message(key, values));
   mutex_message.unlock();
 }
 
@@ -348,7 +348,7 @@ bool Core::process_message(const std::string& type, const MessageValues& v) {
   return true; // continue processing messages
 }
 
-void Core::Execute(const AsyncProgressQueueWorker<char>::ExecutionProgress& progress) {
+void Core::Execute() {
   { // select best argon2 implementation
     const char* hint = nullptr;
 #if defined(HAVE_SSSE2)
@@ -378,8 +378,6 @@ void Core::Execute(const AsyncProgressQueueWorker<char>::ExecutionProgress& prog
   randomx_set_scratchpad_prefetch_mode(0);
   randomx_set_huge_pages_jit(true);
   randomx_set_optimized_dataset_init(1);
-  m_progress = &progress;
-
   while (true) {
     std::deque<Message> messages;
     fromNode.readAll(messages);
@@ -526,10 +524,9 @@ void Core::Execute(const AsyncProgressQueueWorker<char>::ExecutionProgress& prog
 }
 
 AsyncWorker* create_worker(
-  Nan::Callback* const data, Nan::Callback* const complete, Nan::Callback* const error_callback,
-  v8::Local<v8::Object>& options
+  napi_env env, napi_value data, napi_value complete, napi_value error_callback, napi_value options
 ) {
-  return new Core(data, complete, error_callback, options);
+  return new Core(env, data, complete, error_callback, options);
 }
 
-NODE_MODULE(mominer_core, AsyncWorkerWrapper::Init)
+NAPI_MODULE(NODE_GYP_MODULE_NAME, AsyncWorkerWrapper::Init)

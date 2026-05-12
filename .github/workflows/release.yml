@@ -9,32 +9,14 @@ on:
 permissions:
   contents: write
 
+env:
+  WINDOWS_ONEAPI_URL: https://www.intel.com/content/www/us/en/developer/tools/oneapi/oneapi-toolkit-download.html
+  WINDOWS_ONEAPI_PACKAGE: intel-oneapi-toolkit
+  WINDOWS_DPCPP_COMPONENTS: intel.oneapi.win.cpp-dpcpp-common
+  ONEAPI_ROOT: C:/Program Files (x86)/Intel/oneAPI
+
 jobs:
-  validate:
-    runs-on: ubuntu-24.04
-    timeout-minutes: 45
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v5
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v5
-        with:
-          node-version: 24
-          package-manager-cache: false
-
-      - name: Install npm dependencies
-        run: npm install --ignore-scripts --no-audit --no-fund
-
-      - name: Setup Docker Buildx
-        uses: docker/setup-buildx-action@v4
-
-      - name: Test
-        run: npm test
-
   build-linux-x64:
-    needs: validate
     runs-on: ubuntu-24.04
     timeout-minutes: 45
 
@@ -47,9 +29,6 @@ jobs:
         with:
           node-version: 24
           package-manager-cache: false
-
-      - name: Install npm dependencies
-        run: npm install --ignore-scripts --no-audit --no-fund
 
       - name: Setup Docker Buildx
         uses: docker/setup-buildx-action@v4
@@ -62,52 +41,183 @@ jobs:
           set -euo pipefail
           version="${GITHUB_REF_NAME#v}"
           root="mominer-v${version}"
-          archive="mominer-v${version}-linux-x64.tgz"
-          rm -rf release "$archive"
+          archive="mominer-v${version}-lin.tgz"
+          rm -rf release release-build "$archive"
           mkdir -p "release/$root"
 
           docker rm -f mominer-release-lib >/dev/null 2>&1 || true
           docker create --name mominer-release-lib mominer-build >/dev/null
-          libumf="$(docker export mominer-release-lib | tar -t | grep 'opt/intel/oneapi/.*/lib/libumf.so.0' | head -n1)"
-          docker cp -L "mominer-release-lib:$libumf" "release/$root/"
+          mapfile -t bundled_libs < <(ldd build/Release/mominer.node | awk '/not found/{print $1}' | sort -u)
+          for lib in "${bundled_libs[@]}"; do
+            lib_path="$(docker export mominer-release-lib | tar -t | grep "/$lib$" | head -n1)"
+            test -n "$lib_path"
+            docker cp -L "mominer-release-lib:/$lib_path" "release/$root/"
+          done
           docker rm -f mominer-release-lib >/dev/null
 
-          cp mominer.js pool.js opts.js helper.js package.json README.md LICENSE deploy.dockerfile "release/$root/"
-          cp -r node_modules "release/$root/"
+          mkdir -p release-build
+          bundle_path="$PWD/release-build/mominer.bundle.cjs"
+          blob_path="$PWD/release-build/mominer.blob"
+          npx --yes esbuild@0.28.0 mominer.js \
+            --bundle \
+            --platform=node \
+            --format=cjs \
+            --banner:js="const { createRequire } = require('node:module'); require = createRequire(process.execPath);" \
+            --outfile="$bundle_path"
+          cat >release-build/sea-config.json <<EOF
+          {
+            "main": "$bundle_path",
+            "output": "$blob_path",
+            "disableExperimentalSEAWarning": true,
+            "useCodeCache": false,
+            "useSnapshot": false
+          }
+          EOF
+          node --experimental-sea-config release-build/sea-config.json
+          cp "$(command -v node)" "release/$root/mominer"
+          npx --yes postject@1.0.0-alpha.6 "release/$root/mominer" NODE_SEA_BLOB "$blob_path" \
+            --sentinel-fuse NODE_SEA_FUSE_fce680ab2cc467b6e072b8b5df1996b2
+          chmod +x "release/$root/mominer"
+
+          cp package.json README.md LICENSE "release/$root/"
           cp build/Release/mominer.node "release/$root/"
 
-          cat >"release/$root/docker-mominer.sh" <<'EOF'
-          #!/usr/bin/env bash
-          set -e
-          SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
-          if docker buildx version >/dev/null 2>&1; then
-            iid_file="$(mktemp)"
-            trap 'rm -f "$iid_file"' EXIT
-            docker buildx build --load --progress=none --iidfile "$iid_file" -t mominer-deploy -f "$SCRIPT_DIR/deploy.dockerfile" "$SCRIPT_DIR"
-          else
-            docker build -t mominer-deploy -f "$SCRIPT_DIR/deploy.dockerfile" "$SCRIPT_DIR"
-          fi
-          docker run --privileged --rm --name mominer-deploy --hostname mominer-deploy \
-            --mount "type=bind,source=$SCRIPT_DIR,target=/root/mominer" \
-            --workdir /root/mominer \
-            -it mominer-deploy node mominer.js "$@"
-          EOF
-          chmod +x "release/$root/docker-mominer.sh"
-
           tar -C release -czf "$archive" "$root"
+
+      - name: Test release archive
+        env:
+          MOMINER_TEST_SYCL_CPU_GPU: "1"
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          root="mominer-v${version}"
+          archive="mominer-v${version}-lin.tgz"
+          rm -rf release-test
+          mkdir release-test
+          tar -C release-test -xzf "$archive"
+          cp -r tests "release-test/$root/"
+          (cd "release-test/$root" && npm test)
 
       - name: Upload release artifact
         uses: actions/upload-artifact@v7
         with:
-          name: mominer-linux-x64
-          path: mominer-*-linux-x64.tgz
+          name: mominer-lin
+          path: mominer-*-lin.tgz
+
+  build-windows-x64:
+    runs-on: windows-2022
+    timeout-minutes: 90
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          package-manager-cache: false
+
+      - name: Use oneAPI installation cache
+        uses: actions/cache@v5
+        id: cache-oneapi
+        with:
+          path: ${{ env.ONEAPI_ROOT }}
+          key: oneapi-windows-2026.0.0-toolkit-dpcpp-online
+
+      - name: Install Intel oneAPI
+        if: steps.cache-oneapi.outputs.cache-hit != 'true'
+        shell: cmd
+        run: .github\workflows\scripts\install-oneapi.bat "%WINDOWS_ONEAPI_URL%" "%WINDOWS_DPCPP_COMPONENTS%" "%WINDOWS_ONEAPI_PACKAGE%"
+
+      - name: Build native addon
+        shell: cmd
+        run: |
+          call "%ONEAPI_ROOT%\setvars.bat" intel64 --force
+          icx --version
+          npx --yes node-gyp@12.2.0 configure --msvs_version=2022
+          npx --yes node-gyp@12.2.0 build --msvs_version=2022 -- /p:PlatformToolset="Intel C++ Compiler 2026"
+
+      - name: Package release archive
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $version = $env:GITHUB_REF_NAME -replace '^v', ''
+          $root = "mominer-v$version"
+          $archive = "mominer-v$version-win.zip"
+          Remove-Item -Recurse -Force release, release-build, $archive -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Force "release/$root", release-build | Out-Null
+
+          $bundlePath = (Resolve-Path release-build).Path + "\mominer.bundle.cjs"
+          $blobPath = (Resolve-Path release-build).Path + "\mominer.blob"
+          npx --yes esbuild@0.28.0 mominer.js `
+            --bundle `
+            --platform=node `
+            --format=cjs `
+            "--banner:js=const { createRequire } = require('node:module'); require = createRequire(process.execPath);" `
+            --outfile="$bundlePath"
+          @{
+            main = $bundlePath
+            output = $blobPath
+            disableExperimentalSEAWarning = $true
+            useCodeCache = $false
+            useSnapshot = $false
+          } | ConvertTo-Json | Set-Content release-build/sea-config.json
+          node --experimental-sea-config release-build/sea-config.json
+          Copy-Item (Get-Command node).Source "release/$root/mominer.exe"
+          npx --yes postject@1.0.0-alpha.6 "release/$root/mominer.exe" NODE_SEA_BLOB "$blobPath" `
+            --sentinel-fuse NODE_SEA_FUSE_fce680ab2cc467b6e072b8b5df1996b2
+
+          Copy-Item package.json, README.md, LICENSE "release/$root/"
+          Copy-Item build/Release/mominer.node "release/$root/"
+          Copy-Item "$env:ONEAPI_ROOT/compiler/latest/bin/*.dll" "release/$root/" -ErrorAction SilentlyContinue
+          Copy-Item "$env:ONEAPI_ROOT/compiler/latest/bin/*.spv" "release/$root/" -ErrorAction SilentlyContinue
+          Compress-Archive -Path "release/$root" -DestinationPath $archive
+
+      - name: Test release archive
+        shell: pwsh
+        env:
+          MOMINER_TEST_SYCL_CPU_GPU: "1"
+        run: |
+          $ErrorActionPreference = "Stop"
+          $version = $env:GITHUB_REF_NAME -replace '^v', ''
+          $root = "mominer-v$version"
+          $archive = "mominer-v$version-win.zip"
+          Remove-Item -Recurse -Force release-test -ErrorAction SilentlyContinue
+          Expand-Archive $archive release-test
+          Copy-Item tests "release-test/$root/" -Recurse
+          Push-Location "release-test/$root"
+          npm test
+          Pop-Location
+
+      - name: Upload release artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: mominer-win
+          path: mominer-*-win.zip
+
+  publish:
+    if: startsWith(github.ref, 'refs/tags/')
+    needs:
+      - build-linux-x64
+      - build-windows-x64
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Download release artifacts
+        uses: actions/download-artifact@v7
+        with:
+          path: artifacts
 
       - name: Publish GitHub release
-        if: startsWith(github.ref, 'refs/tags/')
         env:
           GH_TOKEN: ${{ github.token }}
-        run: >
-          gh release create "${GITHUB_REF_NAME}"
-          mominer-*-linux-x64.tgz
-          --title "${GITHUB_REF_NAME}"
-          --notes "MoMiner ${GITHUB_REF_NAME}"
+        run: |
+          set -euo pipefail
+          files=()
+          while IFS= read -r -d '' file; do
+            files+=("$file")
+          done < <(find artifacts -type f -print0)
+          gh release create "${GITHUB_REF_NAME}" "${files[@]}" \
+            --title "${GITHUB_REF_NAME}" \
+            --notes "MoMiner ${GITHUB_REF_NAME}"

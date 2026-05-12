@@ -6,10 +6,9 @@ const path = require("path");
 const net  = require("net");
 const tls  = require("tls");
 const fs   = require('fs');
-const si   = require('systeminformation');
-const h    = require(path.join(__dirname, 'helper.js'));
-const o    = require(path.join(__dirname, 'opts.js'));
-const p    = require(path.join(__dirname, 'pool.js'));
+const h    = require("./helper.js");
+const o    = require("./opts.js");
+const p    = require("./pool.js");
 
 // compute core wrapper for cluster process fork
 if (h.cluster_process()) return;
@@ -56,7 +55,7 @@ function parse_args() {
       if (args.length < 1) return o.print_help("Directive \"mine\" needs 1+ parameters");
       const param1 = args.shift();
       if (param1.match(/.\json$/)) { // load config file
-        const config_fn = param1;
+        const config_fn = path.resolve(param1);
         h.log("Loading config file " + config_fn);
         const opt2 = require(config_fn);
         for (const key in opt2) switch (key) {
@@ -335,32 +334,62 @@ function start_mining() {
 
 function on_exit() { exit(0); }
 
+function detect_cpu() {
+  const cpuinfo = fs.readFileSync("/proc/cpuinfo", "utf8");
+  const processor_count = (cpuinfo.match(/^processor\s*:/gm) || []).length;
+  const physical_ids = new Set();
+  for (const match of cpuinfo.matchAll(/^physical id\s*:\s*(.+)$/gm)) physical_ids.add(match[1]);
+
+  let l3cache = 0;
+  const l3_ids = new Set();
+  for (const index of fs.readdirSync("/sys/devices/system/cpu").filter((name) => /^cpu\d+$/.test(name))) {
+    const cache_dir = `/sys/devices/system/cpu/${index}/cache`;
+    if (!fs.existsSync(cache_dir)) continue;
+    for (const entry of fs.readdirSync(cache_dir)) {
+      try {
+        const base = `${cache_dir}/${entry}`;
+        if (fs.readFileSync(`${base}/type`, "utf8").trim() !== "Unified") continue;
+        if (fs.readFileSync(`${base}/level`, "utf8").trim() !== "3") continue;
+        const size = fs.readFileSync(`${base}/size`, "utf8").trim().match(/^(\d+)([KMG])$/i);
+        if (!size) continue;
+        const id = fs.existsSync(`${base}/shared_cpu_list`) ? fs.readFileSync(`${base}/shared_cpu_list`, "utf8").trim() : base;
+        if (l3_ids.has(id)) continue;
+        l3_ids.add(id);
+        const multiplier = { K: 1024, M: 1024 * 1024, G: 1024 * 1024 * 1024 }[size[2].toUpperCase()];
+        l3cache += Number(size[1]) * multiplier;
+      } catch (_) {}
+    }
+  }
+
+  return {
+    cpu_sockets: physical_ids.size || 1,
+    cpu_threads: processor_count || require("os").cpus().length,
+    cpu_l3cache: l3cache,
+  };
+}
+
 switch (directive) {
   case "mine":
     process.on('SIGINT', on_exit);
     compute_core = h.create_core();
     compute_core.from.on("close", function() { process.exit(0); });
-    si.cpu(function(cpu) {
-      compute_core.from.on("algo_params", function(v) {
-        for (const algo in v) {
-          if (!(algo in global.opt.algo_params))
-            global.opt.algo_params[algo] = { dev: v[algo], perf: null };
-        }
-        compute_core.from.on("read_msr", function(v) {
-          global.opt.default_msrs = h.unpack_msr(v);
-          bench_algos(start_mining);
-        });
-        compute_core.from.on("error", function(v) {
-          h.log("Can't access MSR: " + JSON.stringify(v.message));
-          global.opt.default_msrs = {}; // do not try to write it later
-          bench_algos(start_mining);
-        });
-        compute_core.emit_to("read_msr", h.pack_msr(global.opt.default_msrs));
+    compute_core.from.on("algo_params", function(v) {
+      for (const algo in v) {
+        if (!(algo in global.opt.algo_params))
+          global.opt.algo_params[algo] = { dev: v[algo], perf: null };
+      }
+      compute_core.from.on("read_msr", function(v) {
+        global.opt.default_msrs = h.unpack_msr(v);
+        bench_algos(start_mining);
       });
-      compute_core.emit_to("algo_params", {
-        cpu_sockets: cpu.processors, cpu_threads: cpu.cores, cpu_l3cache: cpu.cache.l3
+      compute_core.from.on("error", function(v) {
+        h.log("Can't access MSR: " + JSON.stringify(v.message));
+        global.opt.default_msrs = {}; // do not try to write it later
+        bench_algos(start_mining);
       });
+      compute_core.emit_to("read_msr", h.pack_msr(global.opt.default_msrs));
     });
+    compute_core.emit_to("algo_params", detect_cpu());
     break;
 
   case "test":
@@ -395,10 +424,6 @@ switch (directive) {
     compute_core.from.on("error", function(v) {
       err_exit("Can't detect algo params: " + JSON.stringify(v.message ? v.message : v));
     });
-    si.cpu(function(cpu) {
-      compute_core.emit_to("algo_params", {
-        cpu_sockets: cpu.processors, cpu_threads: cpu.cores, cpu_l3cache: cpu.cache.l3
-      });
-    });
+    compute_core.emit_to("algo_params", detect_cpu());
     break;
 }

@@ -1,5 +1,5 @@
-# https://hub.docker.com/r/intel/oneapi-basekit/tags
-FROM intel/oneapi-basekit:2025.2.2-0-devel-ubuntu24.04
+# https://hub.docker.com/r/intel/oneapi-toolkit/tags
+FROM intel/oneapi-toolkit:2026.0.0-devel-ubuntu24.04
 
 SHELL ["/bin/bash", "-c"]
 

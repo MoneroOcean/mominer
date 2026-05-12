@@ -1,9 +1,13 @@
 "use strict";
 
 const { spawn } = require("node:child_process");
+const fs = require("node:fs");
 const path = require("node:path");
 
 const repoRoot = path.join(__dirname, "..", "..");
+const releaseExecutable = fs.existsSync(path.join(repoRoot, "mominer.exe"))
+  ? path.join(repoRoot, "mominer.exe")
+  : path.join(repoRoot, "mominer");
 let autoAlgoParamsPromise = null;
 
 function quoteCommand(args) {
@@ -23,16 +27,35 @@ function formatFailure(title, args, result) {
 
   return [
     title,
-    `$ ${quoteCommand(["node", ...args])}`,
+    `$ ${quoteCommand(resolveMinerCommand(args))}`,
     exitStatus,
     formatOutput("stdout", result.stdout),
     formatOutput("stderr", result.stderr),
   ].join("\n");
 }
 
+function resolveMinerCommand(args) {
+  if (fs.existsSync(releaseExecutable) && args[0] === "mominer.js") {
+    return [releaseExecutable, ...args.slice(1)];
+  }
+  return ["node", ...args];
+}
+
 function isMissingGpuOutput(result) {
   const output = `${result.stdout}\n${result.stderr}`;
   return /Unknown compute platform gpu|No device of requested type|No GPU|gpu[0-9]+.*not found|SYCL.*device/i.test(output);
+}
+
+function useSyclCpuForGpuTests() {
+  return process.env.MOMINER_TEST_SYCL_CPU_GPU === "1";
+}
+
+function withTestDevice(definition) {
+  const job = { ...definition.job };
+  if (definition.gpu && useSyclCpuForGpuTests()) {
+    job.dev = job.dev.replace(/\bgpu\d+[oz]?/g, "cpu1");
+  }
+  return job;
 }
 
 function escapeRegExp(value) {
@@ -43,7 +66,8 @@ function runNode(args, options = {}) {
   const timeoutMs = options.timeoutMs || 5 * 60 * 1000;
 
   return new Promise((resolve) => {
-    const child = spawn("node", args, {
+    const command = resolveMinerCommand(args);
+    const child = spawn(command[0], command.slice(1), {
       cwd: repoRoot,
       env: { ...process.env },
       stdio: ["ignore", "pipe", "pipe"],
@@ -110,7 +134,8 @@ async function getAutoAlgoParams() {
 }
 
 async function resolveBenchJob(definition) {
-  const job = { ...definition.job };
+  const job = withTestDevice(definition);
+  if (definition.gpu && useSyclCpuForGpuTests()) return { job };
   if (!definition.autoDev) return { job };
 
   const algoParams = await getAutoAlgoParams();
@@ -128,7 +153,7 @@ async function resolveBenchJob(definition) {
 }
 
 async function runMinerTest(definition) {
-  const job = { ...definition.job };
+  const job = withTestDevice(definition);
   const args = [
     "mominer.js",
     "test",
@@ -164,7 +189,8 @@ async function runMinerBench(definition) {
   const hashratePattern = new RegExp(`Algo ${escapeRegExp(job.algo)} \\([^)]*\\) hashrate: ([0-9.]+) H\\/s`);
 
   return new Promise((resolve, reject) => {
-    const child = spawn("node", args, {
+    const command = resolveMinerCommand(args);
+    const child = spawn(command[0], command.slice(1), {
       cwd: repoRoot,
       env: { ...process.env },
       stdio: ["ignore", "pipe", "pipe"],
