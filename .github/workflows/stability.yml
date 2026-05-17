@@ -181,6 +181,11 @@ jobs:
           name: mominer-win-package
           path: dist
 
+      - name: Install Intel OpenCL CPU runtime
+        if: matrix.suite == 'sycl-cpu'
+        shell: powershell
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File .github\workflows\scripts\install-opencl-runtime-windows.ps1
+
       - name: Test extracted package
         shell: powershell
         run: |

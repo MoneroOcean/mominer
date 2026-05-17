@@ -110,6 +110,10 @@ jobs:
         shell: powershell
         run: powershell -NoProfile -ExecutionPolicy Bypass -File .github\workflows\scripts\package-windows.ps1
 
+      - name: Install Intel OpenCL CPU runtime
+        shell: powershell
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File .github\workflows\scripts\install-opencl-runtime-windows.ps1
+
       - name: Test release archive
         shell: powershell
         run: |
