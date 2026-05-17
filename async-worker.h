@@ -16,6 +16,7 @@
 #include <mutex>
 #include <string>
 #include <thread>
+#include <utility>
 
 typedef std::map<std::string, std::string> MessageValues;
 
@@ -28,7 +29,7 @@ static void debug_async_worker(const char* message) {
 struct Message {
   std::string name;
   MessageValues values;
-  Message(std::string name, MessageValues values) : name(name), values(values) {}
+  Message(std::string name, MessageValues values) : name(std::move(name)), values(std::move(values)) {}
 };
 
 template<typename T> class MessageQueue {
@@ -39,20 +40,18 @@ template<typename T> class MessageQueue {
   public:
 
   void write(T data) {
-    while (true) {
+    {
       std::unique_lock<std::mutex> locker(m_mutex);
-      m_buff.push_back(data);
-      locker.unlock();
-      m_cond.notify_all();
-      return;
+      m_buff.emplace_back(std::move(data));
     }
+    m_cond.notify_all();
   }
 
   T read() {
     while (true) {
       std::unique_lock<std::mutex> locker(m_mutex);
       m_cond.wait(locker, [this]() { return m_buff.size() > 0; });
-      T back = m_buff.front();
+      T back = std::move(m_buff.front());
       m_buff.pop_front();
       locker.unlock();
       m_cond.notify_all();
@@ -62,7 +61,7 @@ template<typename T> class MessageQueue {
 
   void readAll(std::deque<T>& target) {
     std::unique_lock<std::mutex> locker(m_mutex);
-    std::copy(m_buff.begin(), m_buff.end(), std::back_inserter(target));
+    std::move(m_buff.begin(), m_buff.end(), std::back_inserter(target));
     m_buff.clear();
     locker.unlock();
   }
@@ -212,8 +211,10 @@ class AsyncWorkerWrapper {
   ~AsyncWorkerWrapper() { delete m_worker; }
 
   static std::string to_string(napi_env env, napi_value value) {
-    napi_value str;
-    check(env, napi_coerce_to_string(env, value, &str));
+    napi_value str = value;
+    napi_valuetype type;
+    check(env, napi_typeof(env, value, &type));
+    if (type != napi_string) check(env, napi_coerce_to_string(env, value, &str));
     size_t len;
     check(env, napi_get_value_string_utf8(env, str, nullptr, 0, &len));
     std::string result(len + 1, '\0');
@@ -259,6 +260,10 @@ class AsyncWorkerWrapper {
     AsyncWorkerWrapper* obj;
     check(env, napi_unwrap(env, self, reinterpret_cast<void**>(&obj)));
 
+    debug_async_worker("sendToCpp reading message name");
+    std::string message_name = to_string(env, args[0]);
+    debug_async_worker("sendToCpp read message name");
+
     MessageValues values;
     if (argc > 1) {
       debug_async_worker("sendToCpp reading values");
@@ -274,8 +279,11 @@ class AsyncWorkerWrapper {
       }
     }
 
+    debug_async_worker("sendToCpp constructing message");
+    Message message(std::move(message_name), std::move(values));
     debug_async_worker("sendToCpp queueing message");
-    obj->m_worker->fromNode.write(Message(to_string(env, args[0]), values));
+    obj->m_worker->fromNode.write(std::move(message));
+    debug_async_worker("sendToCpp queued message");
     debug_async_worker("sendToCpp starting worker");
     obj->m_worker->start();
     debug_async_worker("sendToCpp done");
