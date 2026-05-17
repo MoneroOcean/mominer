@@ -6,7 +6,7 @@
 
 #include <atomic>
 #include <algorithm>
-#include <condition_variable>
+#include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <deque>
@@ -34,27 +34,32 @@ struct Message {
 
 template<typename T> class MessageQueue {
   std::mutex              m_mutex;
-  std::condition_variable m_cond;
   std::deque<T>           m_buff;
 
   public:
 
   void write(T data) {
+    debug_async_worker("MessageQueue write locking");
     {
       std::unique_lock<std::mutex> locker(m_mutex);
+      debug_async_worker("MessageQueue write locked");
       m_buff.emplace_back(std::move(data));
+      debug_async_worker("MessageQueue write stored");
     }
-    m_cond.notify_all();
+    debug_async_worker("MessageQueue write done");
   }
 
   T read() {
     while (true) {
       std::unique_lock<std::mutex> locker(m_mutex);
-      m_cond.wait(locker, [this]() { return m_buff.size() > 0; });
+      if (m_buff.empty()) {
+        locker.unlock();
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        continue;
+      }
       T back = std::move(m_buff.front());
       m_buff.pop_front();
       locker.unlock();
-      m_cond.notify_all();
       return back;
     }
   }
