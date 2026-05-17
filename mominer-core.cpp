@@ -15,6 +15,7 @@
 #include <chrono>
 #include <cstdlib>
 #include <inttypes.h>
+#include <thread>
 
 static const xmrig::ICpuInfo& cpu_info() { return *xmrig::Cpu::info(); }
 #define ci cpu_info()
@@ -481,6 +482,10 @@ void Core::Execute() {
 
       if (!m_nonce32 && !m_nonce64) { // test job
 	m_input_len = 0; // do not produce any more test jobs for async GPU code like in c29
+        if (m_dev == DEV::C29_GPU && c29_sols == 0) {
+          std::this_thread::sleep_for(std::chrono::milliseconds(100));
+          continue;
+        }
         if (m_dev == DEV::C29_GPU && c29_sols == -1) {
           send_msg("test", "result", "EOL");
 	  set_fn(nullptr);
