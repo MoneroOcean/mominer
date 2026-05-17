@@ -109,7 +109,9 @@ char* Core::hash_bin2hex(char* const hash, const unsigned batch) const {
 void Core::send_msg(const std::string key, const MessageValues& values) {
   static std::mutex mutex_message;
   mutex_message.lock();
+  debug_startup(("Core::send_msg " + key).c_str());
   sendToNode(Message(key, values));
+  debug_startup(("Core::send_msg done " + key).c_str());
   mutex_message.unlock();
 }
 
@@ -261,11 +263,15 @@ bool Core::process_message(const std::string& type, const MessageValues& v) {
     if (last_nonce) send_last_nonce(last_nonce, m_nonce_bytes, prev_pool_id);
 
   } else if (type == "bench") {
+    debug_startup("process bench start");
     set_job(true, false, v);
+    debug_startup("process bench done");
     m_target = 0;
 
   } else if (type == "test") {
+    debug_startup("process test start");
     set_job(false, false, v);
+    debug_startup("process test done");
     m_nonce32 = 0;
     m_nonce64 = 0;
     m_target  = 0;
@@ -385,8 +391,10 @@ void Core::Execute() {
       if (hint) argon2_select_impl_by_name(hint);
     }
 
+#if !defined(_WIN32)
     if (ci.arch() == xmrig::ICpuInfo::ARCH_ZEN)
       xmrig::RxFix::setupMainLoopExceptionFrame();
+#endif
 
 #if !defined(_WIN32)
     if (ci.has(xmrig::ICpuInfo::FLAG_SSE41)) rx_blake2b_compress = rx_blake2b_compress_sse41;
@@ -394,8 +402,13 @@ void Core::Execute() {
 #endif
 
     randomx_set_scratchpad_prefetch_mode(0);
+#if defined(_WIN32)
+    randomx_set_huge_pages_jit(false);
+    randomx_set_optimized_dataset_init(0);
+#else
     randomx_set_huge_pages_jit(true);
     randomx_set_optimized_dataset_init(1);
+#endif
     debug_startup("runtime init done");
   };
 

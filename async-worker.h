@@ -19,6 +19,12 @@
 
 typedef std::map<std::string, std::string> MessageValues;
 
+static void debug_async_worker(const char* message) {
+  if (!std::getenv("MOMINER_DEBUG_STARTUP")) return;
+  std::fprintf(stderr, "MOMINER_DEBUG_STARTUP %s\n", message);
+  std::fflush(stderr);
+}
+
 struct Message {
   std::string name;
   MessageValues values;
@@ -146,7 +152,9 @@ class AsyncWorker {
 
   void run() {
     try {
+      debug_async_worker("AsyncWorker run entered");
       Execute();
+      debug_async_worker("AsyncWorker Execute returned");
       napi_call_threadsafe_function(m_complete_tsfn, nullptr, napi_tsfn_blocking);
     } catch (const std::string& err) {
       napi_call_threadsafe_function(m_error_tsfn, new std::string(err), napi_tsfn_blocking);
@@ -179,12 +187,17 @@ class AsyncWorker {
   void start() {
     bool expected = false;
     if (!m_started.compare_exchange_strong(expected, true)) return;
+    debug_async_worker("AsyncWorker starting thread");
     m_thread = std::thread([this]() { run(); });
+    debug_async_worker("AsyncWorker started thread");
   }
 
   void sendToNode(const Message& msg) {
+    debug_async_worker("AsyncWorker queueing message to Node");
     m_toNode.write(msg);
+    debug_async_worker("AsyncWorker calling Node threadsafe function");
     napi_call_threadsafe_function(m_progress_tsfn, nullptr, napi_tsfn_blocking);
+    debug_async_worker("AsyncWorker called Node threadsafe function");
   }
 
   virtual void Execute() = 0;

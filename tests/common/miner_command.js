@@ -307,7 +307,7 @@ async function runMinerTest(definition) {
     "--job",
     JSON.stringify(job),
   ];
-  const result = await runNode(args, { timeoutMs: definition.timeoutMs });
+  let result = await runNode(args, { timeoutMs: definition.timeoutMs });
   const output = `${result.stdout}\n${result.stderr}`;
 
   if (definition.gpu && isMissingGpuOutput(result)) {
@@ -315,6 +315,20 @@ async function runMinerTest(definition) {
   }
 
   if (result.error || result.code !== 0) {
+    if (process.platform === "win32" && !process.env.MOMINER_DEBUG_STARTUP) {
+      const debugResult = await runNode(args, {
+        timeoutMs: definition.timeoutMs,
+        env: { MOMINER_DEBUG_STARTUP: "1" },
+      });
+      result = {
+        ...result,
+        stderr: [
+          result.stderr,
+          "Debug rerun:",
+          formatFailure(`${definition.name} debug rerun`, args, debugResult),
+        ].filter(Boolean).join("\n"),
+      };
+    }
     const message = formatFailure(`${definition.name} failed`, args, result);
     emitGitHubError(definition.name, message);
     throw new Error(message);

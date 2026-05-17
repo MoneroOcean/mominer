@@ -59,6 +59,11 @@ function debugStartup(str) {
   if (process.env.MOMINER_DEBUG_STARTUP) console.error("MOMINER_DEBUG_STARTUP " + str);
 }
 
+function appendRecentText(current, chunk, limit = 8192) {
+  const next = current + chunk.toString("utf8");
+  return next.length > limit ? next.slice(next.length - limit) : next;
+}
+
 function log_str(str) {
   return (new Date().toISOString().replace(/T/, ' ').replace(/\..+/, '')) + " " + str;
 }
@@ -117,7 +122,9 @@ module.exports.create_core = function() {
     emit_to: function(name, data) {
       module.exports.log3("Sending to compute core " + thread_id + " " + name + " message: " +
                           JSON.stringify(data));
+      debugStartup("sending " + name + " to native module");
       worker.sendToCpp(name, data ? data : {});
+      debugStartup("sent " + name + " to native module");
     }
   };
 };
@@ -250,8 +257,11 @@ module.exports.recreate_threads = function(dev, messageHandler) {
         stdio: ["pipe", "pipe", "pipe"],
       });
       let output = "";
+      let recentStdout = "";
+      let recentStderr = "";
       thread.stdout.setEncoding("utf8");
       thread.stdout.on("data", function(chunk) {
+        recentStdout = appendRecentText(recentStdout, chunk);
         output += chunk;
         let eol;
         while ((eol = output.indexOf("\n")) !== -1) {
@@ -264,7 +274,10 @@ module.exports.recreate_threads = function(dev, messageHandler) {
           }
         }
       });
-      thread.stderr.on("data", function(chunk) { process.stderr.write(chunk); });
+      thread.stderr.on("data", function(chunk) {
+        recentStderr = appendRecentText(recentStderr, chunk);
+        process.stderr.write(chunk);
+      });
       thread.on("error", function(error) {
         messageHandler({
           type: "error",
@@ -277,11 +290,15 @@ module.exports.recreate_threads = function(dev, messageHandler) {
         delete worker_procs[i];
         worker_ids = worker_ids.filter((worker_id) => worker_id !== i);
         if (thread.expectedClose) return;
+        const detail = [];
+        if (recentStdout.trim()) detail.push("stdout: " + recentStdout.trim());
+        if (recentStderr.trim()) detail.push("stderr: " + recentStderr.trim());
         messageHandler({
           type: "error",
           value: {
             message: "Worker " + i + " exited unexpectedly" +
-              (signal ? " with signal " + signal : " with code " + code)
+              (signal ? " with signal " + signal : " with code " + code) +
+              (detail.length ? ". " + detail.join(" | ") : "")
           },
           thread_id: i
         });
