@@ -169,6 +169,18 @@ module.exports.cluster_process = function() {
     reallyExit(0);
   });
 
+  let is_exiting = false;
+  function close_worker_process() {
+    if (is_exiting) return reallyExit(0);
+    is_exiting = true;
+    compute_core.emit_to("close");
+    setTimeout(function() { reallyExit(0); }, 3000).unref();
+  }
+  process.on("SIGINT", close_worker_process);
+  process.on("SIGTERM", close_worker_process);
+  if (process.platform === "win32") process.on("SIGBREAK", close_worker_process);
+  else process.on("SIGHUP", close_worker_process);
+
   function handle_msg(msg) {
     switch (msg.type) {
       case "job": case "bench": case "test":
@@ -234,24 +246,61 @@ module.exports.get_dev_batch = function(dev) {
 };
 
 module.exports.messageWorkers = function(msg) {
+  const targets = [];
   for (const worker_id of worker_ids) {
     const worker = worker_procs[worker_id];
     if (worker && worker.stdin && worker.stdin.writable) {
       if (msg.type === "close") worker.expectedClose = true;
       worker.stdin.write(JSON.stringify(msg) + "\n");
+      targets.push({ type: "subprocess", id: worker_id, worker });
       continue;
     }
 
     const cluster_worker = cluster.workers[worker_id];
-    if (cluster_worker) cluster_worker.send(msg);
+    if (cluster_worker) {
+      if (msg.type === "close") cluster_worker.expectedClose = true;
+      cluster_worker.send(msg);
+      targets.push({ type: "cluster", id: worker_id, worker: cluster_worker });
+    }
   }
+  return targets;
+};
+
+function forceCloseWorker(target) {
+  const worker = target.worker;
+  if (!worker) return;
+  if (target.type === "subprocess") {
+    if (worker.exitCode !== null || worker.signalCode !== null || worker.killed) return;
+    if (is_windows_process && worker.pid) {
+      const killer = childProcess.spawn("taskkill", ["/pid", String(worker.pid), "/t", "/f"], {
+        stdio: "ignore",
+      });
+      killer.on("error", function() { worker.kill(); });
+      return;
+    }
+    worker.kill("SIGKILL");
+    return;
+  }
+
+  if (worker.isDead && worker.isDead()) return;
+  worker.kill("SIGKILL");
+}
+
+module.exports.closeWorkers = function(forceAfterMs) {
+  const targets = module.exports.messageWorkers({type: "close"});
+  if (forceAfterMs !== undefined && forceAfterMs !== null) {
+    setTimeout(function() {
+      for (const target of targets) forceCloseWorker(target);
+    }, forceAfterMs).unref();
+  }
+  return targets;
 };
 
 // map 0..N-1 thread IDs into worker.id (that might be not sequential)
 // need to recreate threads from 0 for every algo change since huge memory reallocations
 // can have issues
 module.exports.recreate_threads = function(dev, messageHandler) {
-  module.exports.messageWorkers({type: "close"});
+  module.exports.closeWorkers(5000);
   //for (const thread of Object.values(thread_id_map)) cluster.workers[thread].kill();
   worker_ids = [];
   worker_procs = {};

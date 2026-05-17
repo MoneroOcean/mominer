@@ -36,7 +36,9 @@ $nodeExe = if ($env:NODE_BIN) { $env:NODE_BIN } else { (Get-Command node.exe).So
 if (-not (Test-Path "build/Release/mominer.node")) {
   throw "build/Release/mominer.node is missing; build the native addon before packaging."
 }
-$hasSyclBridge = Test-Path "build/Release/sycl.dll"
+if (-not (Test-Path "build/Release/sycl.dll")) {
+  throw "build/Release/sycl.dll is missing; Windows release packages require SYCL support."
+}
 
 Remove-Item -Recurse -Force release, release-build, $Archive -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Force $packageDir, release-build | Out-Null
@@ -55,24 +57,18 @@ setlocal
 set "MOMINER_DIR=%~dp0"
 set "PATH=%MOMINER_DIR%;%MOMINER_DIR%mominer;%CD%;%CD%\mominer;%PATH%"
 if not defined MOMINER_COMMAND set "MOMINER_COMMAND=mominer"
-if not defined MOMINER_ENABLE_SYCL_ALGO_PARAMS if not defined MOMINER_SKIP_SYCL_ALGO_PARAMS set "MOMINER_SKIP_SYCL_ALGO_PARAMS=1"
+if not defined OCL_ICD_FILENAMES for %%F in ("%MOMINER_DIR%intelocl*.dll") do if exist "%%~fF" set "OCL_ICD_FILENAMES=%%~fF"
 "%MOMINER_DIR%mominer-node.exe" "%MOMINER_DIR%mominer.bundle.cjs" %*
 exit /b %ERRORLEVEL%
 '@ | Set-Content -Encoding ascii "$packageDir/mominer.cmd"
 
 Copy-Item package.json, README.md, LICENSE "$packageDir/"
 Copy-Item build/Release/mominer.node "$packageDir/"
-if ($hasSyclBridge) {
-  Copy-Item build/Release/sycl.dll "$packageDir/"
-}
+Copy-Item build/Release/sycl.dll "$packageDir/"
 
-if ($hasSyclBridge) {
-  Copy-MominerOptionalRuntimeFiles -PackageDir $packageDir
-}
+Copy-MominerOptionalRuntimeFiles -PackageDir $packageDir
 $entryPaths = @("$packageDir/mominer-node.exe", "$packageDir/mominer.node")
-if ($hasSyclBridge) {
-  $entryPaths += "$packageDir/sycl.dll"
-}
+$entryPaths += "$packageDir/sycl.dll"
 Copy-MominerDllClosure -PackageDir $packageDir -EntryPaths $entryPaths
 
 if (Test-Path "$packageDir/tests") {

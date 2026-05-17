@@ -1,9 +1,7 @@
 // Copyright GNU GPLv3 (c) 2023-2025 MoneroOcean <support@moneroocean.stream>
 
 #include "mominer-core.h"
-#if !defined(_WIN32)
 #include "sycl-lib.h"
-#endif
 
 #include "backend/cpu/Cpu.h"
 #include "crypto/cn/CnCtx.h"
@@ -79,10 +77,6 @@ static const xmrig::CnHash::AlgoVariant cpu_params2variant[MAX_CN_CPU_WAYS][2] =
   { xmrig::CnHash::AV_PENTA,  xmrig::CnHash::AV_PENTA_SOFT  }
 };
 
-#if defined(_WIN32)
-static const std::map<std::string, gpu_cn_hash_fun> gpu_cn_algo2fn = {};
-static const std::map<std::string, gpu_c29_hash_fun> gpu_c29_algo2fn = {};
-#else
 static const std::map<std::string, gpu_cn_hash_fun> gpu_cn_algo2fn = {
   { "cn/gpu", cn_gpu },
 };
@@ -90,7 +84,6 @@ static const std::map<std::string, gpu_cn_hash_fun> gpu_cn_algo2fn = {
 static const std::map<std::string, gpu_c29_hash_fun> gpu_c29_algo2fn = {
   { "c29", c29 }
 };
-#endif
 
 static const std::map<std::string, unsigned> algo2mem = [](){
   std::map<std::string, unsigned> result = {
@@ -100,77 +93,6 @@ static const std::map<std::string, unsigned> algo2mem = [](){
   for (const auto& i : cpu_name2algo) result[i.first] = xmrig::Algorithm(i.second).l3();
   return result;
 }();
-
-#if defined(_WIN32)
-static std::map<std::string, std::string> cpu_algo_params(
-  const unsigned max_cpu_batch,
-  const unsigned cpu_sockets, const unsigned cpu_threads, const unsigned cpu_l3cache,
-  const std::map<std::string, unsigned>& algo2mem,
-  const std::set<std::string>& cpu_algos
-) {
-  const unsigned socket_count = std::max(1u, cpu_sockets);
-  const unsigned thread_count = std::max(1u, cpu_threads);
-  // Windows BasicCpuInfo currently does not report cache topology. Use a
-  // conservative per-thread L3 estimate so auto-config never emits cpu*0.
-  const unsigned l3cache = cpu_l3cache ? cpu_l3cache : thread_count * 2u * 1024u * 1024u;
-  std::map<std::string, std::string> result;
-  for (const auto& algo : cpu_algos) {
-    std::string result_dev;
-    auto add_result_dev = [&](const std::string& add_str) {
-      if (!result_dev.empty()) result_dev += ",";
-      result_dev += add_str;
-    };
-
-    if (algo2mem.contains(algo)) {
-      const unsigned batch_mem = algo2mem.at(algo);
-      unsigned used_l3cache = 0;
-      unsigned used_threads = 0;
-      std::list<unsigned> threads;
-      if (algo.starts_with("rx/")) {
-        const unsigned batch = std::max(1u, std::min(thread_count, l3cache / batch_mem) / socket_count);
-        for (unsigned i = 0; i != socket_count; ++i) {
-          threads.push_back(batch);
-        }
-      } else {
-        while (++used_threads <= thread_count && (used_l3cache += batch_mem) <= l3cache)
-          threads.push_back(algo == "ghostrider" ? 8 : 1);
-        if (!algo.starts_with("argon2/")) {
-          while (used_l3cache < l3cache) {
-            bool updated = false;
-            for (auto& i : threads) {
-              if (i < max_cpu_batch && (used_l3cache += batch_mem) <= l3cache) {
-                ++i;
-                updated = true;
-              }
-            }
-            if (!updated) break;
-          }
-        }
-        if (threads.empty()) threads.push_back(1);
-      }
-
-      unsigned prev_batch = 0;
-      unsigned same_batch_threads = 0;
-      auto add_last_dev = [&]() {
-        if (!same_batch_threads || !prev_batch) return;
-        add_result_dev("cpu" + (prev_batch != 1 ? "*" + std::to_string(prev_batch) : ""));
-        if (same_batch_threads != 1) result_dev += "^" + std::to_string(same_batch_threads);
-        same_batch_threads = 0;
-      };
-      for (auto& i : threads) {
-        if (same_batch_threads && prev_batch != i) add_last_dev();
-        prev_batch = i;
-        ++same_batch_threads;
-      }
-      add_last_dev();
-    } else {
-      add_result_dev("cpu^" + std::to_string(thread_count));
-    }
-    result[algo] = result_dev;
-  }
-  return result;
-}
-#endif
 
 static xmrig::VirtualMemory* alloc_huge_mem(const unsigned size) {
   xmrig::VirtualMemory* const mem = new xmrig::VirtualMemory(size, true, false, false);
@@ -506,15 +428,9 @@ void Core::get_algo_params(const MessageValues& v) {
                               gpu_c29_algos = std::getenv("MOMINER_SKIP_SYCL_ALGO_PARAMS")
                                 ? std::set<std::string>{}
                                 : std::set<std::string>(gpu_c29_algo_keys.begin(), gpu_c29_algo_keys.end());
-#if defined(_WIN32)
-  const std::map<std::string, std::string>& result_map = cpu_algo_params(
-    MAX_CN_CPU_WAYS, cpu_sockets, cpu_threads, cpu_l3cache, algo2mem, cpu_algos
-  );
-#else
   const std::map<std::string, std::string>& result_map = algo_params(
     MAX_CN_CPU_WAYS, cpu_sockets, cpu_threads, cpu_l3cache, algo2mem, cpu_algos, gpu_cn_algos, gpu_c29_algos
   );
-#endif
   MessageValues result;
   for (const auto& i : result_map) result[i.first] = i.second;
   send_msg("algo_params", result);

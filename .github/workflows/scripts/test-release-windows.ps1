@@ -50,13 +50,14 @@ if (Test-Path (Join-Path $packageDir "tests")) {
 }
 
 $hasSyclBridge = Test-Path (Join-Path $packageDir "sycl.dll")
+if (-not $hasSyclBridge) {
+  throw "Windows release package is missing sycl.dll."
+}
 $entryPaths = @(
   (Join-Path $packageDir "mominer-node.exe"),
-  (Join-Path $packageDir "mominer.node")
+  (Join-Path $packageDir "mominer.node"),
+  (Join-Path $packageDir "sycl.dll")
 )
-if ($hasSyclBridge) {
-  $entryPaths += (Join-Path $packageDir "sycl.dll")
-}
 Test-MominerDllClosure -PackageDir $packageDir -EntryPaths $entryPaths
 
 Copy-Item tests (Join-Path $packageDir "tests") -Recurse
@@ -71,12 +72,30 @@ $systemPath = @(
 $env:Path = $systemPath
 
 function Enable-IntelOpenCL {
+  if ($env:OCL_ICD_FILENAMES) {
+    return
+  }
+
   $intelOcl = Get-ChildItem -Path $packageDir -Filter "intelocl*.dll" -File -ErrorAction SilentlyContinue | Select-Object -First 1
   if ($intelOcl) {
     $env:OCL_ICD_FILENAMES = $intelOcl.FullName
   }
 }
 
+function Get-SyclCpuDevicesFromOutput {
+  param([Parameter(Mandatory = $true)][string[]]$Output)
+
+  $devices = New-Object 'System.Collections.Generic.List[string]'
+  foreach ($line in $Output) {
+    if ($line -match '^(cpu\d+):\s+(.+)$') {
+      $devices.Add($Matches[1])
+    }
+  }
+  return $devices
+}
+
+Remove-Item Env:MOMINER_ASSUME_SYCL_CPU -ErrorAction SilentlyContinue
+Enable-IntelOpenCL
 Push-Location $packageDir
 try {
   $oldErrorActionPreference = $ErrorActionPreference
@@ -104,15 +123,17 @@ try {
       throw "Invalid algo params for $($prop.Name): $dev"
     }
   }
+  $syclCpuDevices = Get-SyclCpuDevicesFromOutput $smokeOutput
+  if (($Suite -eq "all" -or $Suite -eq "sycl-cpu") -and $syclCpuDevices.Count -eq 0) {
+    throw "Windows $Suite release test requires a CPU SYCL device, but algo_params did not report one.`n$($smokeOutput -join "`n")"
+  }
 
   function Invoke-HashSuite {
     param([string]$Name)
     if ($Name -eq "sycl-cpu") {
       Enable-IntelOpenCL
-      $env:MOMINER_ASSUME_SYCL_CPU = "cpu1"
     }
     & $node tests/run_hash.js $Name
-    Remove-Item Env:MOMINER_ASSUME_SYCL_CPU -ErrorAction SilentlyContinue
     if ($LASTEXITCODE -ne 0) {
       throw "Hash suite failed: $Name"
     }
@@ -120,27 +141,15 @@ try {
 
   switch ($Suite) {
     "all" {
-      if ($hasSyclBridge) {
-        Enable-IntelOpenCL
-        $env:MOMINER_ASSUME_SYCL_CPU = "cpu1"
-        & $node tests/run_hash.js
-        Remove-Item Env:MOMINER_ASSUME_SYCL_CPU -ErrorAction SilentlyContinue
-      } else {
-        & $node tests/run_hash.js cpu
-      }
+      Enable-IntelOpenCL
+      & $node tests/run_hash.js
       if ($LASTEXITCODE -ne 0) {
         throw "Hash suite failed: all"
       }
     }
     "cpu" { Invoke-HashSuite "cpu" }
-    "sycl-cpu" {
-      if ($hasSyclBridge) { Invoke-HashSuite "sycl-cpu" }
-      else { Write-Host "Skipping sycl-cpu suite: Windows package is CPU-only." }
-    }
-    "gpu" {
-      if ($hasSyclBridge) { Invoke-HashSuite "gpu" }
-      else { Write-Host "Skipping gpu suite: Windows package is CPU-only." }
-    }
+    "sycl-cpu" { Invoke-HashSuite "sycl-cpu" }
+    "gpu" { Invoke-HashSuite "gpu" }
     default { throw "Unknown release test suite: $Suite" }
   }
 } finally {

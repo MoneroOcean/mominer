@@ -192,6 +192,9 @@
             "-Wl,-rpath,'$$ORIGIN/mominer'"
           ]
         } ],
+        [ "OS=='win'", {
+          "dependencies": [ "sycl" ]
+        } ],
         [ "OS!='win'", {
           "dependencies": [ "sycl" ]
         } ]

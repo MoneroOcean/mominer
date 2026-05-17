@@ -26,6 +26,10 @@ let test = {
   result:          ""
 };
 let thread_hashrates = {};
+let is_exiting = false;
+
+const WORKER_CLOSE_GRACE_MS = 3000;
+const PROCESS_EXIT_GRACE_MS = 5000;
 
 o.set_default_opts(global.opt, o.opt_help);
 
@@ -56,17 +60,26 @@ function normalizeExpectedResults(algo, value) {
   return value.split("|").map((expected) => normalizeTestResult(algo, expected));
 }
 
-function exit(code) {
+function exit(code, force = directive === "mine" || directive === "bench") {
+  if (is_exiting) {
+    if (force) reallyExit(code);
+    return false;
+  }
+  is_exiting = true;
   if (compute_core) {
     if (Object.keys(global.opt.default_msrs).length)
       compute_core.emit_to("write_msr", h.pack_msr(global.opt.default_msrs));
     compute_core.emit_to("close");
     compute_core = null;
   }
-  h.messageWorkers({type: "close"});
+  h.closeWorkers(force ? WORKER_CLOSE_GRACE_MS : null);
   process.exitCode = code;
   if (directive === "test" || directive === "algo_params") {
     reallyExit(code);
+  } else if (force) {
+    setTimeout(function() {
+      reallyExit(code);
+    }, PROCESS_EXIT_GRACE_MS).unref();
   }
   return false;
 }
@@ -139,12 +152,6 @@ function parse_args() {
 }
 
 if (!parse_args()) return;
-
-if (process.platform === "win32" &&
-    process.env.MOMINER_ENABLE_SYCL_ALGO_PARAMS !== "1" &&
-    !process.env.MOMINER_SKIP_SYCL_ALGO_PARAMS) {
-  process.env.MOMINER_SKIP_SYCL_ALGO_PARAMS = "1";
-}
 
 // handles messages sent to the master thread from worker threads
 function messageHandler(msg) {
@@ -371,7 +378,14 @@ function start_mining() {
   }, global.opt.pool_time.donate_interval * 1000);
 }
 
-function on_exit() { exit(0); }
+function on_exit() { exit(0, true); }
+
+function install_exit_handlers() {
+  process.on("SIGINT", on_exit);
+  process.on("SIGTERM", on_exit);
+  if (process.platform === "win32") process.on("SIGBREAK", on_exit);
+  else process.on("SIGHUP", on_exit);
+}
 
 function detect_cpu() {
   const fallback = {
@@ -418,63 +432,6 @@ function use_msr_tuning() {
   return process.platform !== "win32";
 }
 
-const windows_cpu_algos = [
-  "argon2/chukwa",
-  "argon2/chukwav2",
-  "argon2/wrkz",
-  "cn-heavy/0",
-  "cn-heavy/tube",
-  "cn-heavy/xhv",
-  "cn-lite/0",
-  "cn-lite/1",
-  "cn-pico/0",
-  "cn-pico/tlo",
-  "cn/0",
-  "cn/1",
-  "cn/2",
-  "cn/ccx",
-  "cn/double",
-  "cn/fast",
-  "cn/half",
-  "cn/r",
-  "cn/rto",
-  "cn/rwz",
-  "cn/upx2",
-  "cn/xao",
-  "cn/zls",
-  "ghostrider",
-  "rx/0",
-  "rx/2",
-  "rx/arq",
-  "rx/graft",
-  "rx/sfx",
-  "rx/wow",
-  "rx/yada",
-];
-
-function windows_cpu_algo_params() {
-  const cpu = detect_cpu();
-  const threads = Math.max(1, Number(cpu.cpu_threads) || 1);
-  const multi = (dev) => threads > 1 ? dev + "^" + threads : dev;
-  const params = {};
-
-  for (const algo of windows_cpu_algos) {
-    if (algo.startsWith("rx/")) {
-      params[algo] = "cpu" + (threads > 1 ? "*" + threads : "");
-    } else if (algo === "ghostrider") {
-      params[algo] = multi("cpu*8");
-    } else if (algo === "cn/upx2" || algo.startsWith("cn-pico/")) {
-      params[algo] = multi("cpu*5");
-    } else if (algo.startsWith("cn-lite/")) {
-      params[algo] = multi("cpu*2");
-    } else {
-      params[algo] = multi("cpu");
-    }
-  }
-
-  return params;
-}
-
 function add_algo_params(params) {
   for (const algo in params) {
     if (!(algo in global.opt.algo_params))
@@ -484,17 +441,16 @@ function add_algo_params(params) {
 
 switch (directive) {
   case "mine":
-    process.on('SIGINT', on_exit);
-    if (!use_msr_tuning()) {
-      add_algo_params(windows_cpu_algo_params());
-      global.opt.default_msrs = {};
-      bench_algos(start_mining);
-      break;
-    }
+    install_exit_handlers();
     compute_core = h.create_core();
     compute_core.from.on("close", function() { process.exitCode = 0; });
     compute_core.from.on("algo_params", function(v) {
       add_algo_params(v);
+      if (!use_msr_tuning()) {
+        global.opt.default_msrs = {};
+        bench_algos(start_mining);
+        return;
+      }
       compute_core.from.on("read_msr", function(v) {
         global.opt.default_msrs = h.unpack_msr(v);
         bench_algos(start_mining);
@@ -515,7 +471,7 @@ switch (directive) {
     break;
 
   case "bench":
-    process.on('SIGINT', on_exit);
+    install_exit_handlers();
     h.recreate_threads(global.opt.job.dev, messageHandler);
     if (!use_msr_tuning()) {
       h.messageWorkers({type: "bench", job: last_job = global.opt.job});
@@ -536,11 +492,6 @@ switch (directive) {
     break;
 
   case "algo_params":
-    if (!use_msr_tuning()) {
-      fs.writeSync(1, "MOMINER_ALGO_PARAMS " + JSON.stringify(windows_cpu_algo_params()) + "\n");
-      reallyExit(0);
-      break;
-    }
     compute_core = h.create_core();
     compute_core.from.on("close", function() { process.exitCode = 0; });
     compute_core.from.on("algo_params", function(v) {
