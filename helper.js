@@ -6,9 +6,58 @@ const path    = require("path");
 const events  = require("events");
 const cluster = require("cluster");
 const fs      = require('fs');
+const childProcess = require("child_process");
 
-const thread_id = cluster.isMaster ? "master" : parseInt(process.env["thread_id"]);
+const is_windows_process = process.platform === "win32";
+const is_explicit_worker = process.env.MOMINER_CLUSTER_WORKER === "1";
+const is_worker_process = is_explicit_worker ||
+  (!is_windows_process && !cluster.isMaster);
+const thread_id = is_worker_process ? parseInt(process.env["thread_id"]) : "master";
 let worker_ids = []; // active worker ids (cluster.workers can contain not yet closed workers)
+let worker_procs = {};
+let core_module_for_exit = null;
+const worker_message_prefix = "MOMINER_WORKER_MESSAGE ";
+
+function reallyExit(code) {
+  setImmediate(() => {
+    if (module.exports.exit_now) module.exports.exit_now(code);
+    process.exit(code);
+  });
+}
+
+function childEnv(extra) {
+  const env = { ...process.env, ...extra };
+  if (process.platform !== "win32") return env;
+
+  const pathKey = Object.keys(env).find((key) => key.toLowerCase() === "path") || "Path";
+  const pathValue = env[pathKey] || "";
+  const appDir = path.dirname(process.execPath);
+  for (const key of Object.keys(env)) {
+    if (key.toLowerCase() === "path" && key !== pathKey) delete env[key];
+  }
+  env[pathKey] = [
+    appDir,
+    path.join(appDir, "mominer"),
+    process.cwd(),
+    path.join(process.cwd(), "mominer"),
+    path.join(__dirname, "build", "Release"),
+    pathValue,
+  ]
+    .filter(Boolean)
+    .join(path.delimiter);
+  return env;
+}
+
+function firstExistingPath(paths) {
+  for (const filePath of paths) {
+    if (filePath && fs.existsSync(filePath)) return filePath;
+  }
+  return paths[paths.length - 1];
+}
+
+function debugStartup(str) {
+  if (process.env.MOMINER_DEBUG_STARTUP) console.error("MOMINER_DEBUG_STARTUP " + str);
+}
 
 function log_str(str) {
   return (new Date().toISOString().replace(/T/, ' ').replace(/\..+/, '')) + " " + str;
@@ -36,11 +85,22 @@ module.exports.log_err = function(str) {
 
 module.exports.create_core = function() {
   this.log3("Starting compute core in " + thread_id + " thread");
-  const deploy_path = path.join(__dirname, "./mominer.node");
-  const core_path   = fs.existsSync(deploy_path) ? deploy_path :
-                      path.join(__dirname, "/build/Release/mominer.node");
+  const appDir = path.dirname(process.execPath);
+  const core_path = firstExistingPath([
+    path.join(appDir, "mominer.node"),
+    path.join(appDir, "mominer", "mominer.node"),
+    path.join(appDir, "build", "Release", "mominer.node"),
+    path.join(process.cwd(), "mominer.node"),
+    path.join(process.cwd(), "mominer", "mominer.node"),
+    path.join(__dirname, "mominer.node"),
+    path.join(__dirname, "build", "Release", "mominer.node"),
+  ]);
+  debugStartup("requiring " + core_path);
   const core_module = require(core_path);
+  debugStartup("required native module");
+  core_module_for_exit = core_module;
   let emitter = new events();
+  debugStartup("constructing AsyncWorker");
   let worker = new core_module.AsyncWorker(
     function(name, value) {
       module.exports.log3("Getting from compute core " + thread_id + " " + name + " message: " +
@@ -51,6 +111,7 @@ module.exports.create_core = function() {
     function(error) { emitter.emit("error", error); },
     {} // no extra options
   );
+  debugStartup("constructed AsyncWorker");
   return {
     from:    emitter,
     emit_to: function(name, data) {
@@ -61,8 +122,15 @@ module.exports.create_core = function() {
   };
 };
 
+module.exports.exit_now = function(code) {
+  if (core_module_for_exit && core_module_for_exit.exitNow) {
+    core_module_for_exit.exitNow(code);
+  }
+  process.exit(code);
+};
+
 module.exports.cluster_process = function() {
-  if (cluster.isMaster) return false;
+  if (!is_worker_process) return false;
 
   // process worker thread env vars
   global.opt = { log_level: parseInt(process.env["log_level"]) };
@@ -71,7 +139,9 @@ module.exports.cluster_process = function() {
 
   // send message from worker thread to master thread
   function send_msg(type, value) {
-    return process.send({type: type, value: value, thread_id: thread_id});
+    const msg = {type: type, value: value, thread_id: thread_id};
+    if (process.send) return process.send(msg);
+    process.stdout.write(worker_message_prefix + JSON.stringify(msg) + "\n");
   }
   compute_core.from.on("test",        function(v) { send_msg("test", v); });
   compute_core.from.on("last_nonce",  function(v) { send_msg("last_nonce", v); });
@@ -79,10 +149,13 @@ module.exports.cluster_process = function() {
   compute_core.from.on("hashrate",    function(v) { send_msg("hashrate", v); });
   compute_core.from.on("algo_params", function(v) { send_msg("algo_params", v); });
   compute_core.from.on("error",       function(v) { send_msg("error", v); });
-  compute_core.from.on("close",       function()  { process.exit(0); });
+  compute_core.from.on("close",       function()  {
+    process.exitCode = 0;
+    if (process.disconnect) process.disconnect();
+    reallyExit(0);
+  });
 
-  // process messages from the master thread
-  process.on("message", function(msg) {
+  function handle_msg(msg) {
     switch (msg.type) {
       case "job": case "bench": case "test":
         // find dev for this specific thread from msg.job.dev list
@@ -93,13 +166,28 @@ module.exports.cluster_process = function() {
       case "pause": case "close":
         compute_core.emit_to(msg.type);
         break;
-      default: this.log_err("Unknown thread message");
+      default: module.exports.log_err("Unknown thread message");
     }
-  });
+  }
+
+  // process messages from the master thread
+  process.on("message", handle_msg);
+  if (!process.send) {
+    let input = "";
+    process.stdin.setEncoding("utf8");
+    process.stdin.on("data", function(chunk) {
+      input += chunk;
+      let eol;
+      while ((eol = input.indexOf("\n")) !== -1) {
+        const line = input.slice(0, eol);
+        input = input.slice(eol + 1);
+        if (line) handle_msg(JSON.parse(line));
+      }
+    });
+  }
 
   return true;
 };
-
 
 // get thread dev stripping ^thread specification from it
 module.exports.get_thread_dev = function(thread_id, devs) {
@@ -132,7 +220,17 @@ module.exports.get_dev_batch = function(dev) {
 };
 
 module.exports.messageWorkers = function(msg) {
-  for (const worker_id of worker_ids) if (cluster.workers[worker_id]) cluster.workers[worker_id].send(msg);
+  for (const worker_id of worker_ids) {
+    const worker = worker_procs[worker_id];
+    if (worker && worker.stdin && worker.stdin.writable) {
+      if (msg.type === "close") worker.expectedClose = true;
+      worker.stdin.write(JSON.stringify(msg) + "\n");
+      continue;
+    }
+
+    const cluster_worker = cluster.workers[worker_id];
+    if (cluster_worker) cluster_worker.send(msg);
+  }
 };
 
 // map 0..N-1 thread IDs into worker.id (that might be not sequential)
@@ -142,11 +240,59 @@ module.exports.recreate_threads = function(dev, messageHandler) {
   module.exports.messageWorkers({type: "close"});
   //for (const thread of Object.values(thread_id_map)) cluster.workers[thread].kill();
   worker_ids = [];
+  worker_procs = {};
   const curr_thread_count = this.get_dev_threads(dev);
   for (let i = 0; i < curr_thread_count; ++ i) {
-    let thread = cluster.fork({thread_id: i, log_level: global.opt.log_level});
-    thread.on("message", messageHandler);
-    worker_ids.push(thread.id);
+    const env = childEnv({thread_id: i, log_level: global.opt.log_level});
+    if (is_windows_process) {
+      const thread = childProcess.spawn(process.execPath, process.argv.slice(1), {
+        env: {...env, MOMINER_CLUSTER_WORKER: "1"},
+        stdio: ["pipe", "pipe", "pipe"],
+      });
+      let output = "";
+      thread.stdout.setEncoding("utf8");
+      thread.stdout.on("data", function(chunk) {
+        output += chunk;
+        let eol;
+        while ((eol = output.indexOf("\n")) !== -1) {
+          const line = output.slice(0, eol);
+          output = output.slice(eol + 1);
+          if (line.startsWith(worker_message_prefix)) {
+            messageHandler(JSON.parse(line.slice(worker_message_prefix.length)));
+          } else if (line) {
+            process.stdout.write(line + "\n");
+          }
+        }
+      });
+      thread.stderr.on("data", function(chunk) { process.stderr.write(chunk); });
+      thread.on("error", function(error) {
+        messageHandler({
+          type: "error",
+          value: { message: "Worker " + i + " failed to start: " + error.message },
+          thread_id: i
+        });
+      });
+      thread.on("exit", function(code, signal) {
+        if (worker_procs[i] !== thread) return;
+        delete worker_procs[i];
+        worker_ids = worker_ids.filter((worker_id) => worker_id !== i);
+        if (thread.expectedClose) return;
+        messageHandler({
+          type: "error",
+          value: {
+            message: "Worker " + i + " exited unexpectedly" +
+              (signal ? " with signal " + signal : " with code " + code)
+          },
+          thread_id: i
+        });
+      });
+      worker_ids.push(i);
+      worker_procs[i] = thread;
+    } else {
+      const thread = cluster.fork(env);
+      thread.on("message", messageHandler);
+      worker_ids.push(thread.id);
+    }
   }
 };
 

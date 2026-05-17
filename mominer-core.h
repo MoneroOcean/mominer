@@ -35,8 +35,6 @@ enum DEV { CPU, RX_CPU, GPU, C29_GPU };
 
 class Core: public AsyncWorker {
   const unsigned HASHRATE_COUNTER_INTERVAL = 10; // iterations to skip to update/check hashrate
-  // store pointer to send messages back easier
-  const AsyncProgressQueueWorker<char>::ExecutionProgress* m_progress;
   FN m_fn;
   DEV m_dev;
   xmrig::VirtualMemory *m_lpads, *m_rx_cache_mem, *m_rx_dataset_mem;
@@ -109,10 +107,10 @@ class Core: public AsyncWorker {
   public:
 
   Core(
-    Nan::Callback* const data, Nan::Callback* const complete,
-    Nan::Callback* const error_callback,  const v8::Local<v8::Object>& options
-  ) : AsyncWorker(data, complete, error_callback), m_progress(nullptr),
-      m_lpads(nullptr), m_rx_cache_mem(nullptr), m_rx_dataset_mem(nullptr),
+    napi_env env, napi_value data, napi_value complete,
+    napi_value error_callback, napi_value options
+  ) : AsyncWorker(env, data, complete, error_callback),
+      m_dev(CPU), m_lpads(nullptr), m_rx_cache_mem(nullptr), m_rx_dataset_mem(nullptr),
       m_spads(nullptr), m_ctx(nullptr), m_input(nullptr), m_output(nullptr),
       m_job_ref(0), m_height(0), m_batch(0), m_mem_size(0), m_input_len(0),
       m_nonce_step(1), m_nonce_bytes(4), m_nonce_offset(39), m_c29_proof_size(32),
@@ -123,5 +121,5 @@ class Core: public AsyncWorker {
     m_fn.any = nullptr;
   }
 
-  void Execute(const AsyncProgressQueueWorker<char>::ExecutionProgress& progress);
+  void Execute() override;
 };

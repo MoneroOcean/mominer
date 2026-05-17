@@ -11,8 +11,10 @@
 #include <thread>
 #include <mutex>
 #include <atomic>
+#include <cstdio>
 #include "sycl-lib-internal.h"
 #include "consts.h"
+#include "crypto/randomx/blake2/blake2.h"
 
 // Cuckaroo Cycle algorithm constants
 const constexpr uint64_t DUCK_SIZE_A    = 129;
@@ -664,15 +666,13 @@ static void start_new_c29_solution_search(const uint64_t seed_k0, const uint64_t
   }
 }
 
-extern int (*rx_blake2b)(void* out, const size_t outlen, const void* in, const size_t inlen);
-
 int c29(const unsigned job_ref, const unsigned c29_proof_size,
         const uint8_t* const input, const unsigned input_size,
         uint8_t* const output, uint32_t* const output_edges,
         uint64_t* const pnonce, const std::string& dev_str) {
 
   try {
-    const auto exception_handler = [] (sycl::exception_list exceptions) {
+    const sycl::async_handler exception_handler = [] (sycl::exception_list exceptions) {
       for (std::exception_ptr const& e : exceptions) {
         try {
           std::rethrow_exception(e);
@@ -689,7 +689,7 @@ int c29(const unsigned job_ref, const unsigned c29_proof_size,
     // Set optimal SYCL compiler flags for this algo
     static bool isFirstTime = true;
     if (isFirstTime) {
-      setenv("SYCL_PROGRAM_COMPILE_OPTIONS", "-O3 -Rpass=loop-vectorize -Rpass-missed=loop-vectorize -Rpass-analysis=loop-vectorize", 1);
+      set_sycl_env("SYCL_PROGRAM_COMPILE_OPTIONS", "-O3 -Rpass=loop-vectorize -Rpass-missed=loop-vectorize -Rpass-analysis=loop-vectorize");
       isFirstTime = false;
     }
 

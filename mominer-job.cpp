@@ -1,7 +1,9 @@
 // Copyright GNU GPLv3 (c) 2023-2025 MoneroOcean <support@moneroocean.stream>
 
 #include "mominer-core.h"
+#if !defined(_WIN32)
 #include "sycl-lib.h"
+#endif
 
 #include "backend/cpu/Cpu.h"
 #include "crypto/cn/CnCtx.h"
@@ -9,16 +11,21 @@
 #include "crypto/ghostrider/ghostrider.h"
 #include "crypto/randomx/configuration.h"
 #include "crypto/randomx/aes_hash.hpp"
+#include "base/tools/bswap_64.h"
 
+#include <algorithm>
 #include <ranges>
 #include <list>
+#include <set>
 #include <thread>
+#include <cstdlib>
 
 const constexpr unsigned MAX_BLOB_LEN    = 512;
 const constexpr unsigned SPAD_LEN        = 200;
 const constexpr unsigned MAX_CN_CPU_WAYS = 5;
 
-static const xmrig::ICpuInfo& ci = *xmrig::Cpu::info();
+static const xmrig::ICpuInfo& cpu_info() { return *xmrig::Cpu::info(); }
+#define ci cpu_info()
 
 static const std::map<std::string, xmrig::Algorithm::Id> cpu_name2algo = {
   { "cn/0",            xmrig::Algorithm::CN_0           },
@@ -72,6 +79,10 @@ static const xmrig::CnHash::AlgoVariant cpu_params2variant[MAX_CN_CPU_WAYS][2] =
   { xmrig::CnHash::AV_PENTA,  xmrig::CnHash::AV_PENTA_SOFT  }
 };
 
+#if defined(_WIN32)
+static const std::map<std::string, gpu_cn_hash_fun> gpu_cn_algo2fn = {};
+static const std::map<std::string, gpu_c29_hash_fun> gpu_c29_algo2fn = {};
+#else
 static const std::map<std::string, gpu_cn_hash_fun> gpu_cn_algo2fn = {
   { "cn/gpu", cn_gpu },
 };
@@ -79,6 +90,7 @@ static const std::map<std::string, gpu_cn_hash_fun> gpu_cn_algo2fn = {
 static const std::map<std::string, gpu_c29_hash_fun> gpu_c29_algo2fn = {
   { "c29", c29 }
 };
+#endif
 
 static const std::map<std::string, unsigned> algo2mem = [](){
   std::map<std::string, unsigned> result = {
@@ -88,6 +100,77 @@ static const std::map<std::string, unsigned> algo2mem = [](){
   for (const auto& i : cpu_name2algo) result[i.first] = xmrig::Algorithm(i.second).l3();
   return result;
 }();
+
+#if defined(_WIN32)
+static std::map<std::string, std::string> cpu_algo_params(
+  const unsigned max_cpu_batch,
+  const unsigned cpu_sockets, const unsigned cpu_threads, const unsigned cpu_l3cache,
+  const std::map<std::string, unsigned>& algo2mem,
+  const std::set<std::string>& cpu_algos
+) {
+  const unsigned socket_count = std::max(1u, cpu_sockets);
+  const unsigned thread_count = std::max(1u, cpu_threads);
+  // Windows BasicCpuInfo currently does not report cache topology. Use a
+  // conservative per-thread L3 estimate so auto-config never emits cpu*0.
+  const unsigned l3cache = cpu_l3cache ? cpu_l3cache : thread_count * 2u * 1024u * 1024u;
+  std::map<std::string, std::string> result;
+  for (const auto& algo : cpu_algos) {
+    std::string result_dev;
+    auto add_result_dev = [&](const std::string& add_str) {
+      if (!result_dev.empty()) result_dev += ",";
+      result_dev += add_str;
+    };
+
+    if (algo2mem.contains(algo)) {
+      const unsigned batch_mem = algo2mem.at(algo);
+      unsigned used_l3cache = 0;
+      unsigned used_threads = 0;
+      std::list<unsigned> threads;
+      if (algo.starts_with("rx/")) {
+        const unsigned batch = std::max(1u, std::min(thread_count, l3cache / batch_mem) / socket_count);
+        for (unsigned i = 0; i != socket_count; ++i) {
+          threads.push_back(batch);
+        }
+      } else {
+        while (++used_threads <= thread_count && (used_l3cache += batch_mem) <= l3cache)
+          threads.push_back(algo == "ghostrider" ? 8 : 1);
+        if (!algo.starts_with("argon2/")) {
+          while (used_l3cache < l3cache) {
+            bool updated = false;
+            for (auto& i : threads) {
+              if (i < max_cpu_batch && (used_l3cache += batch_mem) <= l3cache) {
+                ++i;
+                updated = true;
+              }
+            }
+            if (!updated) break;
+          }
+        }
+        if (threads.empty()) threads.push_back(1);
+      }
+
+      unsigned prev_batch = 0;
+      unsigned same_batch_threads = 0;
+      auto add_last_dev = [&]() {
+        if (!same_batch_threads || !prev_batch) return;
+        add_result_dev("cpu" + (prev_batch != 1 ? "*" + std::to_string(prev_batch) : ""));
+        if (same_batch_threads != 1) result_dev += "^" + std::to_string(same_batch_threads);
+        same_batch_threads = 0;
+      };
+      for (auto& i : threads) {
+        if (same_batch_threads && prev_batch != i) add_last_dev();
+        prev_batch = i;
+        ++same_batch_threads;
+      }
+      add_last_dev();
+    } else {
+      add_result_dev("cpu^" + std::to_string(thread_count));
+    }
+    result[algo] = result_dev;
+  }
+  return result;
+}
+#endif
 
 static xmrig::VirtualMemory* alloc_huge_mem(const unsigned size) {
   xmrig::VirtualMemory* const mem = new xmrig::VirtualMemory(size, true, false, false);
@@ -337,17 +420,17 @@ void Core::set_job(
           alignas(16) uint8_t  prev_input[MAX_BLOB_LEN];
           alignas(16) uint64_t temp_hash[8];
           uint32_t nonce = new_nonce + new_thread_id * m_batch + batch_id;
-          if (m_nicehash_mask) nonce |= __builtin_bswap32(*get_nonce32(new_input2, 0)) & static_cast<uint32_t>(m_nicehash_mask);
+          if (m_nicehash_mask) nonce |= bswap_32(*get_nonce32(new_input2, 0)) & static_cast<uint32_t>(m_nicehash_mask);
           const unsigned nonce_step = new_thread_num * m_batch;
           unsigned hashrate_update_counter = HASHRATE_COUNTER_INTERVAL;
           memcpy(input, new_input2, m_input_len);
-          if (is_set_nonce) { *get_nonce32(input, 0) = __builtin_bswap32(nonce); nonce += nonce_step; }
+          if (is_set_nonce) { *get_nonce32(input, 0) = bswap_32(nonce); nonce += nonce_step; }
           if (is_rx_v2) memcpy(prev_input, input, m_input_len);
           randomx_calculate_hash_first(m_vm[thread_id], temp_hash, input, m_input_len);
           while (job_ref == m_job_ref) { // continue until we get a new job
             uint32_t* const pnonce = get_nonce32(input, 0);
             const uint32_t prev_nonce = nonce;
-            *pnonce = __builtin_bswap32(nonce += nonce_step);
+            *pnonce = bswap_32(nonce += nonce_step);
 	    // check that current nonce is greater than previous one and nince hash protected nonce part is not changed
             if (m_target && ( m_nicehash_mask ? (prev_nonce & static_cast<uint32_t>(m_nicehash_mask)) != (nonce & static_cast<uint32_t>(m_nicehash_mask)) :
                               prev_nonce > nonce )
@@ -392,15 +475,15 @@ void Core::set_job(
       memcpy(m_input + m_input_len*i, new_input, m_input_len);
     if (m_nonce_bytes == 4) {
       m_nonce32 = new_nonce + new_thread_id;
-      if (m_nicehash_mask) m_nonce32 |= __builtin_bswap32(*get_nonce32(new_input, 0)) & static_cast<uint32_t>(m_nicehash_mask);
+      if (m_nicehash_mask) m_nonce32 |= bswap_32(*get_nonce32(new_input, 0)) & static_cast<uint32_t>(m_nicehash_mask);
       if (is_set_nonce) for (unsigned i = 0; i != m_batch; ++i) {
-        *get_nonce32(i) = __builtin_bswap32(m_nonce32); m_nonce32 += m_nonce_step;
+        *get_nonce32(i) = bswap_32(m_nonce32); m_nonce32 += m_nonce_step;
       }
     } else {
       m_nonce64 = new_nonce + new_thread_id;
-      if (m_nicehash_mask) m_nonce64 |= __builtin_bswap64(*get_nonce64(new_input, 0)) & m_nicehash_mask;
+      if (m_nicehash_mask) m_nonce64 |= bswap_64(*get_nonce64(new_input, 0)) & m_nicehash_mask;
       if (is_set_nonce) for (unsigned i = 0; i != m_batch; ++i) {
-        *get_nonce64(i) = __builtin_bswap64(m_nonce64); m_nonce64 += m_nonce_step;
+        *get_nonce64(i) = bswap_64(m_nonce64); m_nonce64 += m_nonce_step;
       }
     }
   }
@@ -417,11 +500,21 @@ void Core::get_algo_params(const MessageValues& v) {
   const auto& gpu_cn_algo_keys = std::views::keys(gpu_cn_algo2fn);
   const auto& gpu_c29_algo_keys = std::views::keys(gpu_c29_algo2fn);
   const std::set<std::string> cpu_algos(cpu_algo_keys.begin(), cpu_algo_keys.end()),
-                              gpu_cn_algos(gpu_cn_algo_keys.begin(), gpu_cn_algo_keys.end()),
-			      gpu_c29_algos(gpu_c29_algo_keys.begin(), gpu_c29_algo_keys.end());
+                              gpu_cn_algos = std::getenv("MOMINER_SKIP_SYCL_ALGO_PARAMS")
+                                ? std::set<std::string>{}
+                                : std::set<std::string>(gpu_cn_algo_keys.begin(), gpu_cn_algo_keys.end()),
+                              gpu_c29_algos = std::getenv("MOMINER_SKIP_SYCL_ALGO_PARAMS")
+                                ? std::set<std::string>{}
+                                : std::set<std::string>(gpu_c29_algo_keys.begin(), gpu_c29_algo_keys.end());
+#if defined(_WIN32)
+  const std::map<std::string, std::string>& result_map = cpu_algo_params(
+    MAX_CN_CPU_WAYS, cpu_sockets, cpu_threads, cpu_l3cache, algo2mem, cpu_algos
+  );
+#else
   const std::map<std::string, std::string>& result_map = algo_params(
     MAX_CN_CPU_WAYS, cpu_sockets, cpu_threads, cpu_l3cache, algo2mem, cpu_algos, gpu_cn_algos, gpu_c29_algos
   );
+#endif
   MessageValues result;
   for (const auto& i : result_map) result[i.first] = i.second;
   send_msg("algo_params", result);

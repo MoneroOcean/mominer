@@ -10,13 +10,22 @@
 #include "crypto/rx/RxFix.h"
 #include "hw/msr/Msr.h"
 #include "3rdparty/argon2.h"
+#include "base/tools/bswap_64.h"
 
 #include <chrono>
+#include <cstdlib>
 #include <inttypes.h>
 
-static const xmrig::ICpuInfo& ci = *xmrig::Cpu::info();
+static const xmrig::ICpuInfo& cpu_info() { return *xmrig::Cpu::info(); }
+#define ci cpu_info()
 void (*rx_blake2b_compress)(blake2b_state* S, const uint8_t * block) = rx_blake2b_compress_integer;
 int (*rx_blake2b)(void* out, size_t outlen, const void* in, size_t inlen) = rx_blake2b_default;
+
+static void debug_startup(const char* message) {
+  if (!std::getenv("MOMINER_DEBUG_STARTUP")) return;
+  fprintf(stderr, "MOMINER_DEBUG_STARTUP %s\n", message);
+  fflush(stderr);
+}
 
 struct MsrValue {
   uint64_t value, mask;
@@ -100,7 +109,7 @@ char* Core::hash_bin2hex(char* const hash, const unsigned batch) const {
 void Core::send_msg(const std::string key, const MessageValues& values) {
   static std::mutex mutex_message;
   mutex_message.lock();
-  sendToNode(*m_progress, Message(key, values));
+  sendToNode(Message(key, values));
   mutex_message.unlock();
 }
 
@@ -348,43 +357,56 @@ bool Core::process_message(const std::string& type, const MessageValues& v) {
   return true; // continue processing messages
 }
 
-void Core::Execute(const AsyncProgressQueueWorker<char>::ExecutionProgress& progress) {
-  { // select best argon2 implementation
-    const char* hint = nullptr;
+void Core::Execute() {
+  debug_startup("Core::Execute entered");
+  bool runtime_initialized = false;
+  auto init_runtime = [&]() {
+    if (runtime_initialized) return;
+    runtime_initialized = true;
+    debug_startup("runtime init start");
+
+    { // select best argon2 implementation
+      const char* hint = nullptr;
 #if defined(HAVE_SSSE2)
-    if (ci.has(xmrig::ICpuInfo::FLAG_SSE2))    hint = "SSE2";
+      if (ci.has(xmrig::ICpuInfo::FLAG_SSE2))    hint = "SSE2";
 #endif
 #if defined(HAVE_SSSE3)
-    if (ci.has(xmrig::ICpuInfo::FLAG_SSSE3))   hint = "SSSE3";
+      if (ci.has(xmrig::ICpuInfo::FLAG_SSSE3))   hint = "SSSE3";
 #endif
 #if defined(HAVE_XOP)
-    if (ci.has(xmrig::ICpuInfo::FLAG_XOP))     hint = "XOP";
+      if (ci.has(xmrig::ICpuInfo::FLAG_XOP))     hint = "XOP";
 #endif
 #if defined(HAVE_AVX2)
-    if (ci.has(xmrig::ICpuInfo::FLAG_AVX2))    hint = "AVX2";
+      if (ci.has(xmrig::ICpuInfo::FLAG_AVX2))    hint = "AVX2";
 #endif
 #if defined(HAVE_AVX512F)
-    if      (ci.has(xmrig::ICpuInfo::FLAG_AVX512F)) hint = "AVX-512F";
+      if      (ci.has(xmrig::ICpuInfo::FLAG_AVX512F)) hint = "AVX-512F";
 #endif
-    if (hint) argon2_select_impl_by_name(hint);
-  }
+      if (hint) argon2_select_impl_by_name(hint);
+    }
 
-  if (ci.arch() == xmrig::ICpuInfo::ARCH_ZEN)
-    xmrig::RxFix::setupMainLoopExceptionFrame();
+    if (ci.arch() == xmrig::ICpuInfo::ARCH_ZEN)
+      xmrig::RxFix::setupMainLoopExceptionFrame();
 
-  if (ci.has(xmrig::ICpuInfo::FLAG_SSE41)) rx_blake2b_compress = rx_blake2b_compress_sse41;
-  if (ci.hasAVX2())                        rx_blake2b          = blake2b_avx2;
+#if !defined(_WIN32)
+    if (ci.has(xmrig::ICpuInfo::FLAG_SSE41)) rx_blake2b_compress = rx_blake2b_compress_sse41;
+    if (ci.hasAVX2())                        rx_blake2b          = blake2b_avx2;
+#endif
 
-  randomx_set_scratchpad_prefetch_mode(0);
-  randomx_set_huge_pages_jit(true);
-  randomx_set_optimized_dataset_init(1);
-  m_progress = &progress;
+    randomx_set_scratchpad_prefetch_mode(0);
+    randomx_set_huge_pages_jit(true);
+    randomx_set_optimized_dataset_init(1);
+    debug_startup("runtime init done");
+  };
 
   while (true) {
     std::deque<Message> messages;
     fromNode.readAll(messages);
     for (const auto& message : messages) {
       try {
+        debug_startup(("message " + message.name).c_str());
+        if (message.name == "job" || message.name == "bench" || message.name == "test")
+          init_runtime();
         if (!process_message(message.name, message.values)) return;
       } catch(const std::string& err) {
         send_error(std::string("Message processing exception: ") + err);
@@ -414,6 +436,7 @@ void Core::Execute(const AsyncProgressQueueWorker<char>::ExecutionProgress& prog
     }
 
     if (m_fn.any) {
+      init_runtime();
       int c29_sols;
       uint64_t c29_nonce;
       try {
@@ -425,7 +448,7 @@ void Core::Execute(const AsyncProgressQueueWorker<char>::ExecutionProgress& prog
 	    m_fn.gpu_cn(m_input, m_input_len, m_output, m_spads, m_batch, m_dev_str);
 	    break;
           case DEV::C29_GPU:
-	    c29_nonce = m_nonce_bytes == 4 ? __builtin_bswap32(*get_nonce32()) : __builtin_bswap64(*get_nonce64());
+	    c29_nonce = m_nonce_bytes == 4 ? bswap_32(*get_nonce32()) : bswap_64(*get_nonce64());
             c29_sols = m_fn.gpu_c29(
 	      m_job_ref, m_c29_proof_size, m_input, m_input_len, m_output,
               static_cast<uint32_t*>(m_spads), &c29_nonce, m_dev_str
@@ -472,14 +495,14 @@ void Core::Execute(const AsyncProgressQueueWorker<char>::ExecutionProgress& prog
           for (unsigned i = 0; i != m_batch; ++i) {
             uint32_t* const pnonce = get_nonce32(i);
             if (m_target && *get_result(i) < m_target)
-              send_result(__builtin_bswap32(*pnonce), 4, m_output + HASH_LEN * i);
+              send_result(bswap_32(*pnonce), 4, m_output + HASH_LEN * i);
             *pnonce = m_nonce32;
             m_nonce32 += m_nonce_step;
           }
         } else {
           if (c29_sols == 1 && m_target && *get_result() < m_target)
             send_result(c29_nonce, 4, m_output, static_cast<uint32_t*>(m_spads), m_c29_proof_size);
-          *get_nonce32() = __builtin_bswap32(m_nonce32);
+          *get_nonce32() = bswap_32(m_nonce32);
           m_nonce32 += m_nonce_step;
         }
 
@@ -498,14 +521,14 @@ void Core::Execute(const AsyncProgressQueueWorker<char>::ExecutionProgress& prog
           for (unsigned i = 0; i != m_batch; ++i) {
             uint64_t* const pnonce = get_nonce64(i);
             if (m_target && *get_result(i) < m_target)
-              send_result(__builtin_bswap64(*pnonce), 8, m_output + HASH_LEN * i);
+              send_result(bswap_64(*pnonce), 8, m_output + HASH_LEN * i);
             *pnonce = m_nonce64;
             m_nonce64 += m_nonce_step;
           }
         } else {
           if (c29_sols == 1 && m_target && *get_result() < m_target)
             send_result(c29_nonce, 8, m_output, static_cast<uint32_t*>(m_spads), m_c29_proof_size);
-          *get_nonce64() = __builtin_bswap64(m_nonce64);
+          *get_nonce64() = bswap_64(m_nonce64);
           m_nonce64 += m_nonce_step;
         }
 
@@ -526,10 +549,9 @@ void Core::Execute(const AsyncProgressQueueWorker<char>::ExecutionProgress& prog
 }
 
 AsyncWorker* create_worker(
-  Nan::Callback* const data, Nan::Callback* const complete, Nan::Callback* const error_callback,
-  v8::Local<v8::Object>& options
+  napi_env env, napi_value data, napi_value complete, napi_value error_callback, napi_value options
 ) {
-  return new Core(data, complete, error_callback, options);
+  return new Core(env, data, complete, error_callback, options);
 }
 
-NODE_MODULE(mominer_core, AsyncWorkerWrapper::Init)
+NAPI_MODULE(NODE_GYP_MODULE_NAME, AsyncWorkerWrapper::Init)
