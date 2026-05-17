@@ -247,6 +247,7 @@ class AsyncWorkerWrapper {
   }
 
   static napi_value sendToCpp(napi_env env, napi_callback_info info) {
+    debug_async_worker("sendToCpp entered");
     size_t argc = 2;
     napi_value args[2], self;
     check(env, napi_get_cb_info(env, info, &argc, args, &self, nullptr));
@@ -260,6 +261,7 @@ class AsyncWorkerWrapper {
 
     MessageValues values;
     if (argc > 1) {
+      debug_async_worker("sendToCpp reading values");
       napi_value names;
       uint32_t len;
       check(env, napi_get_property_names(env, args[1], &names));
@@ -272,8 +274,11 @@ class AsyncWorkerWrapper {
       }
     }
 
+    debug_async_worker("sendToCpp queueing message");
     obj->m_worker->fromNode.write(Message(to_string(env, args[0]), values));
+    debug_async_worker("sendToCpp starting worker");
     obj->m_worker->start();
+    debug_async_worker("sendToCpp done");
     return nullptr;
   }
 

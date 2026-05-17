@@ -122,8 +122,12 @@ module.exports.create_core = function() {
     emit_to: function(name, data) {
       module.exports.log3("Sending to compute core " + thread_id + " " + name + " message: " +
                           JSON.stringify(data));
+      const payload = {};
+      for (const [key, value] of Object.entries(data ? data : {})) {
+        payload[key] = value === undefined || value === null ? "" : String(value);
+      }
       debugStartup("sending " + name + " to native module");
-      worker.sendToCpp(name, data ? data : {});
+      worker.sendToCpp(name, payload);
       debugStartup("sent " + name + " to native module");
     }
   };
