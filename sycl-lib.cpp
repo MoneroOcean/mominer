@@ -164,7 +164,7 @@ std::map<std::string, std::string> algo_params(
         add_result_dev(dev_str + "*1"); // batch is not really used by this algo
       }
     }
-    result[algo] = result_dev;
+    if (!result_dev.empty()) result[algo] = result_dev;
   }
   return result;
 }
