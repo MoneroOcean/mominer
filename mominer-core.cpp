@@ -107,12 +107,11 @@ char* Core::hash_bin2hex(char* const hash, const unsigned batch) const {
 }
 
 void Core::send_msg(const std::string key, const MessageValues& values) {
-  static std::mutex mutex_message;
-  mutex_message.lock();
+  static SimpleMutex mutex_message;
+  SimpleLock lock(mutex_message);
   debug_startup(("Core::send_msg " + key).c_str());
   sendToNode(Message(key, values));
   debug_startup(("Core::send_msg done " + key).c_str());
-  mutex_message.unlock();
 }
 
 void Core::send_msg(const std::string& topic, const std::string& key, const std::string& value) {

@@ -106,14 +106,14 @@
             "Release": {
               "msvs_settings": {
                 "VCCLCompilerTool": {
-                  "RuntimeLibrary": 2
+                  "RuntimeLibrary": 0
                 }
               }
             },
             "Debug": {
               "msvs_settings": {
                 "VCCLCompilerTool": {
-                  "RuntimeLibrary": 3
+                  "RuntimeLibrary": 1
                 }
               }
             }

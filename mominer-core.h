@@ -51,7 +51,7 @@ class Core: public AsyncWorker {
   randomx_dataset* m_rx_dataset;
   ctpl::thread_pool* m_thread_pool;
   randomx_vm** m_vm;
-  std::mutex m_mutex_hashrate;
+  SimpleMutex m_mutex_hashrate;
 
   inline uint32_t* get_nonce32(uint8_t* const input, const unsigned batch) {
     return reinterpret_cast<uint32_t*>(input + (batch * m_input_len) + m_nonce_offset);

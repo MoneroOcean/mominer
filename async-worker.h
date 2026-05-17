@@ -13,7 +13,6 @@
 #include <iostream>
 #include <iterator>
 #include <map>
-#include <mutex>
 #include <string>
 #include <thread>
 #include <utility>
@@ -32,8 +31,34 @@ struct Message {
   Message(std::string name, MessageValues values) : name(std::move(name)), values(std::move(values)) {}
 };
 
+class SimpleMutex {
+  std::atomic_flag m_flag = ATOMIC_FLAG_INIT;
+
+  public:
+
+  void lock() {
+    while (m_flag.test_and_set(std::memory_order_acquire)) std::this_thread::yield();
+  }
+
+  void unlock() {
+    m_flag.clear(std::memory_order_release);
+  }
+};
+
+class SimpleLock {
+  SimpleMutex& m_mutex;
+
+  public:
+
+  explicit SimpleLock(SimpleMutex& mutex) : m_mutex(mutex) { m_mutex.lock(); }
+  ~SimpleLock() { m_mutex.unlock(); }
+
+  SimpleLock(const SimpleLock&) = delete;
+  SimpleLock& operator=(const SimpleLock&) = delete;
+};
+
 template<typename T> class MessageQueue {
-  std::mutex              m_mutex;
+  SimpleMutex             m_mutex;
   std::deque<T>           m_buff;
 
   public:
@@ -41,7 +66,7 @@ template<typename T> class MessageQueue {
   void write(T data) {
     debug_async_worker("MessageQueue write locking");
     {
-      std::unique_lock<std::mutex> locker(m_mutex);
+      SimpleLock lock(m_mutex);
       debug_async_worker("MessageQueue write locked");
       m_buff.emplace_back(std::move(data));
       debug_async_worker("MessageQueue write stored");
@@ -51,24 +76,22 @@ template<typename T> class MessageQueue {
 
   T read() {
     while (true) {
-      std::unique_lock<std::mutex> locker(m_mutex);
-      if (m_buff.empty()) {
-        locker.unlock();
-        std::this_thread::sleep_for(std::chrono::milliseconds(10));
-        continue;
+      {
+        SimpleLock lock(m_mutex);
+        if (!m_buff.empty()) {
+          T back = std::move(m_buff.front());
+          m_buff.pop_front();
+          return back;
+        }
       }
-      T back = std::move(m_buff.front());
-      m_buff.pop_front();
-      locker.unlock();
-      return back;
+      std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
   }
 
   void readAll(std::deque<T>& target) {
-    std::unique_lock<std::mutex> locker(m_mutex);
+    SimpleLock lock(m_mutex);
     std::move(m_buff.begin(), m_buff.end(), std::back_inserter(target));
     m_buff.clear();
-    locker.unlock();
   }
 };
 
