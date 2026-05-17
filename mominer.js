@@ -418,20 +418,83 @@ function use_msr_tuning() {
   return process.platform !== "win32";
 }
 
+const windows_cpu_algos = [
+  "argon2/chukwa",
+  "argon2/chukwav2",
+  "argon2/wrkz",
+  "cn-heavy/0",
+  "cn-heavy/tube",
+  "cn-heavy/xhv",
+  "cn-lite/0",
+  "cn-lite/1",
+  "cn-pico/0",
+  "cn-pico/tlo",
+  "cn/0",
+  "cn/1",
+  "cn/2",
+  "cn/ccx",
+  "cn/double",
+  "cn/fast",
+  "cn/half",
+  "cn/r",
+  "cn/rto",
+  "cn/rwz",
+  "cn/upx2",
+  "cn/xao",
+  "cn/zls",
+  "ghostrider",
+  "rx/0",
+  "rx/2",
+  "rx/arq",
+  "rx/graft",
+  "rx/sfx",
+  "rx/wow",
+  "rx/yada",
+];
+
+function windows_cpu_algo_params() {
+  const cpu = detect_cpu();
+  const threads = Math.max(1, Number(cpu.cpu_threads) || 1);
+  const multi = (dev) => threads > 1 ? dev + "^" + threads : dev;
+  const params = {};
+
+  for (const algo of windows_cpu_algos) {
+    if (algo.startsWith("rx/")) {
+      params[algo] = "cpu" + (threads > 1 ? "*" + threads : "");
+    } else if (algo === "ghostrider") {
+      params[algo] = multi("cpu*8");
+    } else if (algo === "cn/upx2" || algo.startsWith("cn-pico/")) {
+      params[algo] = multi("cpu*5");
+    } else if (algo.startsWith("cn-lite/")) {
+      params[algo] = multi("cpu*2");
+    } else {
+      params[algo] = multi("cpu");
+    }
+  }
+
+  return params;
+}
+
+function add_algo_params(params) {
+  for (const algo in params) {
+    if (!(algo in global.opt.algo_params))
+      global.opt.algo_params[algo] = { dev: params[algo], perf: null };
+  }
+}
+
 switch (directive) {
   case "mine":
     process.on('SIGINT', on_exit);
+    if (!use_msr_tuning()) {
+      add_algo_params(windows_cpu_algo_params());
+      global.opt.default_msrs = {};
+      bench_algos(start_mining);
+      break;
+    }
     compute_core = h.create_core();
     compute_core.from.on("close", function() { process.exitCode = 0; });
     compute_core.from.on("algo_params", function(v) {
-      for (const algo in v) {
-        if (!(algo in global.opt.algo_params))
-          global.opt.algo_params[algo] = { dev: v[algo], perf: null };
-      }
-      if (!use_msr_tuning()) {
-        global.opt.default_msrs = {};
-        return bench_algos(start_mining);
-      }
+      add_algo_params(v);
       compute_core.from.on("read_msr", function(v) {
         global.opt.default_msrs = h.unpack_msr(v);
         bench_algos(start_mining);
@@ -453,13 +516,13 @@ switch (directive) {
 
   case "bench":
     process.on('SIGINT', on_exit);
-    compute_core = h.create_core();
-    compute_core.from.on("close", function() { process.exitCode = 0; });
     h.recreate_threads(global.opt.job.dev, messageHandler);
     if (!use_msr_tuning()) {
       h.messageWorkers({type: "bench", job: last_job = global.opt.job});
       break;
     }
+    compute_core = h.create_core();
+    compute_core.from.on("close", function() { process.exitCode = 0; });
     compute_core.from.on("read_msr", function(v) {
       global.opt.default_msrs = h.unpack_msr(v); // to restore them on exit
       set_algo_msr(global.opt.job.algo);
@@ -473,6 +536,11 @@ switch (directive) {
     break;
 
   case "algo_params":
+    if (!use_msr_tuning()) {
+      fs.writeSync(1, "MOMINER_ALGO_PARAMS " + JSON.stringify(windows_cpu_algo_params()) + "\n");
+      reallyExit(0);
+      break;
+    }
     compute_core = h.create_core();
     compute_core.from.on("close", function() { process.exitCode = 0; });
     compute_core.from.on("algo_params", function(v) {
