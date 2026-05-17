@@ -12,6 +12,9 @@ const is_windows_process = process.platform === "win32";
 const is_explicit_worker = process.env.MOMINER_CLUSTER_WORKER === "1";
 const is_worker_process = is_explicit_worker ||
   (!is_windows_process && !cluster.isMaster);
+const use_subprocess_workers = is_windows_process ||
+  process.env.MOMINER_USE_SUBPROCESS_WORKERS === "1" ||
+  Boolean(process.env.MOMINER_COMMAND);
 const thread_id = is_worker_process ? parseInt(process.env["thread_id"]) : "master";
 let worker_ids = []; // active worker ids (cluster.workers can contain not yet closed workers)
 let worker_procs = {};
@@ -255,7 +258,7 @@ module.exports.recreate_threads = function(dev, messageHandler) {
   const curr_thread_count = this.get_dev_threads(dev);
   for (let i = 0; i < curr_thread_count; ++ i) {
     const env = childEnv({thread_id: i, log_level: global.opt.log_level});
-    if (is_windows_process) {
+    if (use_subprocess_workers) {
       const thread = childProcess.spawn(process.execPath, process.argv.slice(1), {
         env: {...env, MOMINER_CLUSTER_WORKER: "1"},
         stdio: ["pipe", "pipe", "pipe"],
