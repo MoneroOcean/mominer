@@ -1,12 +1,21 @@
 "use strict";
 
 const { spawn } = require("node:child_process");
+const fs = require("node:fs");
 const path = require("node:path");
 const { perfTests } = require("./vectors");
 
 const repoRoot = path.join(__dirname, "..");
 const algo = process.argv[2];
-const args = ["env"];
+const testArgs = [
+  "--require",
+  "./tests/common/test_output_buffer.js",
+  "--test",
+  "--test-reporter=./tests/common/spec_reporter.js",
+  "--test-concurrency=1",
+  "tests/perf.js",
+];
+const testEnv = {};
 
 if (algo && !perfTests.some((definition) => definition.algo === algo)) {
   console.error(`Unknown perf algo: ${algo}`);
@@ -14,20 +23,28 @@ if (algo && !perfTests.some((definition) => definition.algo === algo)) {
   process.exit(1);
 }
 
-if (algo) args.push(`MOMINER_PERF_ALGO=${algo}`);
+if (algo) testEnv.MOMINER_PERF_ALGO = algo;
 
-args.push(
-  "node",
-  "--require",
-  "./tests/common/test_output_buffer.js",
-  "--test",
-  "--test-reporter=./tests/common/spec_reporter.js",
-  "--test-concurrency=1",
-  "tests/perf.js"
-);
+function isInsideRsh() {
+  return process.env.MOMINER_R_SH === "1" || fs.existsSync("/.dockerenv");
+}
 
-const child = spawn("./r.sh", args, {
+let runner;
+if (process.platform === "win32" || isInsideRsh()) {
+  runner = { command: process.execPath, args: testArgs, env: testEnv };
+} else if (fs.existsSync(path.join(repoRoot, "r.sh"))) {
+  const args = ["env"];
+  if (algo) args.push(`MOMINER_PERF_ALGO=${algo}`);
+  runner = { command: "./r.sh", args: [...args, "node", ...testArgs] };
+} else if (fs.existsSync(path.join(repoRoot, "mominer")) || fs.existsSync(path.join(repoRoot, "mominer.exe"))) {
+  runner = { command: process.execPath, args: testArgs, env: testEnv };
+} else {
+  runner = { command: "./docker-mominer.sh", args: ["node", ...testArgs], env: testEnv };
+}
+
+const child = spawn(runner.command, runner.args, {
   cwd: repoRoot,
+  env: { ...process.env, ...(runner.env || {}) },
   stdio: "inherit",
 });
 

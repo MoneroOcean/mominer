@@ -68,7 +68,6 @@ if [ -z "${OCL_ICD_FILENAMES:-}" ] && [ -f "$script_dir/libs/libintelocl.so" ]; 
   export OCL_ICD_FILENAMES="$script_dir/libs/libintelocl.so"
 fi
 
-export MOMINER_COMMAND="${MOMINER_COMMAND:-./mominer}"
 exec "$script_dir/mominer-bin" "$@"
 EOF
 chmod +x "$package_dir/mominer"

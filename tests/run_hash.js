@@ -27,8 +27,14 @@ const testArgs = [
   ...suites[suite],
 ];
 
+function isInsideRsh() {
+  return process.env.MOMINER_R_SH === "1" || fs.existsSync("/.dockerenv");
+}
+
 let runner;
 if (process.platform === "win32") {
+  runner = { command: process.execPath, args: testArgs };
+} else if (isInsideRsh()) {
   runner = { command: process.execPath, args: testArgs };
 } else if (fs.existsSync(path.join(repoRoot, "r.sh"))) {
   runner = { command: "./r.sh", args: ["node", ...testArgs] };

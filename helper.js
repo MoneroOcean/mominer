@@ -13,8 +13,7 @@ const is_explicit_worker = process.env.MOMINER_CLUSTER_WORKER === "1";
 const is_worker_process = is_explicit_worker ||
   (!is_windows_process && !cluster.isMaster);
 const use_subprocess_workers = is_windows_process ||
-  process.env.MOMINER_USE_SUBPROCESS_WORKERS === "1" ||
-  Boolean(process.env.MOMINER_COMMAND);
+  process.env.MOMINER_USE_SUBPROCESS_WORKERS === "1";
 const thread_id = is_worker_process ? parseInt(process.env["thread_id"]) : "master";
 let worker_ids = []; // active worker ids (cluster.workers can contain not yet closed workers)
 let worker_procs = {};
@@ -262,7 +261,16 @@ module.exports.messageWorkers = function(msg) {
     const cluster_worker = cluster.workers[worker_id];
     if (cluster_worker) {
       if (msg.type === "close") cluster_worker.expectedClose = true;
-      cluster_worker.send(msg);
+      if (cluster_worker.isConnected && !cluster_worker.isConnected()) continue;
+      try {
+        cluster_worker.send(msg, function(error) {
+          if (!error || msg.type === "close" || cluster_worker.expectedClose) return;
+          cluster_worker.emit("error", error);
+        });
+      } catch (error) {
+        if (msg.type !== "close" && !cluster_worker.expectedClose) cluster_worker.emit("error", error);
+        continue;
+      }
       targets.push({ type: "cluster", id: worker_id, worker: cluster_worker });
     }
   }
@@ -367,6 +375,26 @@ module.exports.recreate_threads = function(dev, messageHandler) {
     } else {
       const thread = cluster.fork(env);
       thread.on("message", messageHandler);
+      thread.on("error", function(error) {
+        if (thread.expectedClose) return;
+        messageHandler({
+          type: "error",
+          value: { message: "Worker " + i + " IPC error: " + error.message },
+          thread_id: i
+        });
+      });
+      thread.on("exit", function(code, signal) {
+        worker_ids = worker_ids.filter((worker_id) => worker_id !== thread.id);
+        if (thread.expectedClose) return;
+        messageHandler({
+          type: "error",
+          value: {
+            message: "Worker " + i + " exited unexpectedly" +
+              (signal ? " with signal " + signal : " with code " + code)
+          },
+          thread_id: i
+        });
+      });
       worker_ids.push(thread.id);
     }
   }
