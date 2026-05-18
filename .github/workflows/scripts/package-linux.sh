@@ -72,7 +72,7 @@ exec "$script_dir/mominer-bin" "$@"
 EOF
 chmod +x "$package_dir/mominer"
 
-cp package.json README.md LICENSE "$package_dir/"
+cp package.json README.md LICENSE install.sh "$package_dir/"
 cp build/Release/mominer.node "$libs_dir/"
 
 container="mominer-release-libs-$$"

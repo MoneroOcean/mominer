@@ -62,6 +62,43 @@ Tagged GitHub releases build Linux x86-64 `.tgz` and Windows x86-64 `.zip` archi
 executable embeds the Node.js control plane, so Docker and system Node.js are not required to run
 the release artifact.
 
+# Host Intel GPU Runtime
+
+Linux release archives include `install.sh`. Run it as root on Ubuntu 24.04 or 26.04 if `cn/gpu`
+performance is lower outside Docker, or if Level Zero/OpenCL GPU detection is missing:
+
+```
+sudo ./install.sh
+```
+
+The script does not add an apt repository. It downloads Intel's upstream Ubuntu `.deb` packages,
+verifies SHA-256 checksums, and installs this coherent GPU compute runtime set:
+
+* `level-zero_1.28.2+u24.04_amd64.deb`
+* `libze-intel-gpu1_26.18.38308.1-0_amd64.deb`
+* `intel-opencl-icd_26.18.38308.1-0_amd64.deb`
+* `intel-igc-core-2_2.34.4+21428_amd64.deb`
+* `intel-igc-opencl-2_2.34.4+21428_amd64.deb`
+* `libigdgmm12_22.10.0_amd64.deb`
+* `intel-ocloc_26.18.38308.1-0_amd64.deb`
+
+These package names and versions match the Intel compute-runtime `26.18.38308.1`, Intel Graphics
+Compiler `2.34.4`, oneAPI Level Zero loader `1.28.2`, and gmmlib `22.10.0` release recipes. The
+installer keeps mominer's bundled SYCL runtime libraries in place; installing the full oneAPI
+runtime system-wide would be much larger than the release-bundled runtime closure.
+
+Windows release archives include `install.bat`. Run it from an elevated Administrator command
+prompt to install the Intel OpenCL CPU runtime silently:
+
+```
+install.bat
+```
+
+Windows GPU Level Zero support is supplied by the Intel Graphics Driver, not by a small standalone
+`libze` package. Keep the Intel Graphics Driver current if `gpuN` Level Zero devices are missing or
+slow on Windows. The Windows release package already bundles the oneAPI SYCL and Level Zero loader
+DLLs needed by mominer.
+
 # Usage example
 
 On Linux if you run miner like that for the first time it will benchmark all supported algos and
