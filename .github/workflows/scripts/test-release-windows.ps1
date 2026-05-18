@@ -45,24 +45,29 @@ try {
 Remove-Item -Recurse -Force $workDir -ErrorAction SilentlyContinue
 Expand-Archive $Archive $workDir
 $packageDir = Join-Path $workDir $root
+$libsDir = Join-Path $packageDir "libs"
 if (Test-Path (Join-Path $packageDir "tests")) {
   throw "Extracted release package unexpectedly contains tests/."
 }
 
-$hasSyclBridge = Test-Path (Join-Path $packageDir "sycl.dll")
+$hasSyclBridge = Test-Path (Join-Path $libsDir "sycl.dll")
 if (-not $hasSyclBridge) {
-  throw "Windows release package is missing sycl.dll."
+  throw "Windows release package is missing libs/sycl.dll."
+}
+if (-not (Test-Path (Join-Path $libsDir "mominer.node"))) {
+  throw "Windows release package is missing libs/mominer.node."
 }
 $entryPaths = @(
   (Join-Path $packageDir "mominer-node.exe"),
-  (Join-Path $packageDir "mominer.node"),
-  (Join-Path $packageDir "sycl.dll")
+  (Join-Path $libsDir "mominer.node"),
+  (Join-Path $libsDir "sycl.dll")
 )
-Test-MominerDllClosure -PackageDir $packageDir -EntryPaths $entryPaths
+Test-MominerDllClosure -PackageDir $libsDir -EntryPaths $entryPaths
 
 Copy-Item tests (Join-Path $packageDir "tests") -Recurse
 
 $systemPath = @(
+  $libsDir,
   $packageDir,
   "$env:WINDIR\System32",
   $env:WINDIR,
@@ -76,7 +81,7 @@ function Enable-IntelOpenCL {
     return
   }
 
-  $intelOcl = Get-ChildItem -Path $packageDir -Filter "intelocl*.dll" -File -ErrorAction SilentlyContinue | Select-Object -First 1
+  $intelOcl = Get-ChildItem -Path $libsDir -Filter "intelocl*.dll" -File -ErrorAction SilentlyContinue | Select-Object -First 1
   if ($intelOcl) {
     $env:OCL_ICD_FILENAMES = $intelOcl.FullName
   }

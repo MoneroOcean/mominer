@@ -13,6 +13,7 @@ version="${version#v}"
 root="mominer-v${version}"
 archive="${2:-mominer-v${version}-lin.tgz}"
 package_dir="release/${root}"
+libs_dir="$package_dir/libs"
 build_dir="release-build"
 node_bin="${NODE_BIN:-$(command -v node)}"
 
@@ -22,7 +23,7 @@ if [ ! -f build/Release/mominer.node ]; then
 fi
 
 rm -rf release "$build_dir" "$archive"
-mkdir -p "$package_dir" "$build_dir"
+mkdir -p "$package_dir" "$libs_dir" "$build_dir"
 
 bundle_path="$PWD/$build_dir/mominer.bundle.cjs"
 blob_path="$PWD/$build_dir/mominer.blob"
@@ -56,15 +57,15 @@ case "$0" in
 esac
 script_dir=$(CDPATH= cd -- "$script_dir" && pwd -P)
 
-library_dirs="$script_dir:$script_dir/lib:$(pwd):$(pwd)/mominer"
+library_dirs="$script_dir/libs:$script_dir:$(pwd)/libs:$(pwd)"
 if [ -n "${LD_LIBRARY_PATH:-}" ]; then
   export LD_LIBRARY_PATH="$library_dirs:$LD_LIBRARY_PATH"
 else
   export LD_LIBRARY_PATH="$library_dirs"
 fi
 
-if [ -z "${OCL_ICD_FILENAMES:-}" ] && [ -f "$script_dir/libintelocl.so" ]; then
-  export OCL_ICD_FILENAMES="$script_dir/libintelocl.so"
+if [ -z "${OCL_ICD_FILENAMES:-}" ] && [ -f "$script_dir/libs/libintelocl.so" ]; then
+  export OCL_ICD_FILENAMES="$script_dir/libs/libintelocl.so"
 fi
 
 export MOMINER_COMMAND="${MOMINER_COMMAND:-./mominer}"
@@ -73,7 +74,7 @@ EOF
 chmod +x "$package_dir/mominer"
 
 cp package.json README.md LICENSE "$package_dir/"
-cp build/Release/mominer.node "$package_dir/"
+cp build/Release/mominer.node "$libs_dir/"
 
 container="mominer-release-libs-$$"
 docker rm -f "$container" >/dev/null 2>&1 || true
@@ -94,17 +95,17 @@ find_oneapi_path() {
 copy_container_file() {
   local source_path="$1"
   local dest_name="${2:-$(basename "$source_path")}"
-  if [ -z "$source_path" ] || [ -f "$package_dir/$dest_name" ]; then
+  if [ -z "$source_path" ] || [ -f "$libs_dir/$dest_name" ]; then
     return
   fi
-  docker cp -L "$container:$source_path" "$package_dir/$dest_name"
+  docker cp -L "$container:$source_path" "$libs_dir/$dest_name"
 }
 
 copy_container_runtime_path() {
   local source_path="$1"
   local dest_name resolved target_name quoted
   dest_name="$(basename "$source_path")"
-  if [ -z "$source_path" ] || [ -e "$package_dir/$dest_name" ] || [ -L "$package_dir/$dest_name" ]; then
+  if [ -z "$source_path" ] || [ -e "$libs_dir/$dest_name" ] || [ -L "$libs_dir/$dest_name" ]; then
     return
   fi
 
@@ -114,7 +115,7 @@ copy_container_runtime_path() {
     target_name="$(basename "$resolved")"
     copy_container_file "$resolved" "$target_name"
     if [ "$dest_name" != "$target_name" ]; then
-      ln -s "./$target_name" "$package_dir/$dest_name"
+      ln -s "./$target_name" "$libs_dir/$dest_name"
     fi
   else
     copy_container_file "$source_path" "$dest_name"
@@ -135,9 +136,9 @@ copy_oneapi_name() {
 missing_libraries() {
   local file
   while IFS= read -r -d "" file; do
-    LD_LIBRARY_PATH="$PWD/$package_dir" ldd "$file" 2>/dev/null || true
+    LD_LIBRARY_PATH="$PWD/$libs_dir:$PWD/$package_dir" ldd "$file" 2>/dev/null || true
   done < <(
-    find "$package_dir" -maxdepth 1 -type f \
+    find "$package_dir" "$libs_dir" -maxdepth 1 -type f \
       \( -name "mominer-bin" -o -name "mominer.node" -o -name "*.so" -o -name "*.so.*" \) \
       -print0
   ) | awk '/not found/{print $1}' | sort -u

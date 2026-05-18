@@ -95,11 +95,14 @@ module.exports.create_core = function() {
   this.log3("Starting compute core in " + thread_id + " thread");
   const appDir = path.dirname(process.execPath);
   const core_path = firstExistingPath([
+    path.join(appDir, "libs", "mominer.node"),
     path.join(appDir, "mominer.node"),
     path.join(appDir, "mominer", "mominer.node"),
     path.join(appDir, "build", "Release", "mominer.node"),
+    path.join(process.cwd(), "libs", "mominer.node"),
     path.join(process.cwd(), "mominer.node"),
     path.join(process.cwd(), "mominer", "mominer.node"),
+    path.join(__dirname, "libs", "mominer.node"),
     path.join(__dirname, "mominer.node"),
     path.join(__dirname, "build", "Release", "mominer.node"),
   ]);

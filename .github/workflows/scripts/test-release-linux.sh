@@ -43,21 +43,26 @@ fi
 
 tar -C "$work_dir" -xzf "$archive"
 package_dir="$work_dir/$root"
+libs_dir="$package_dir/libs"
 if [ -d "$package_dir/tests" ]; then
   echo "Extracted release package unexpectedly contains tests/." >&2
+  exit 1
+fi
+if [ ! -f "$libs_dir/mominer.node" ]; then
+  echo "Extracted release package is missing libs/mominer.node." >&2
   exit 1
 fi
 
 check_ldd() {
   local file output failed=0
   while IFS= read -r -d "" file; do
-    output="$(LD_LIBRARY_PATH="$PWD/$package_dir" ldd "$file" 2>&1 || true)"
+    output="$(LD_LIBRARY_PATH="$PWD/$libs_dir:$PWD/$package_dir" ldd "$file" 2>&1 || true)"
     if grep -q "not found" <<<"$output"; then
       echo "$output" >&2
       failed=1
     fi
   done < <(
-    find "$package_dir" -maxdepth 1 -type f \
+    find "$package_dir" "$libs_dir" -maxdepth 1 -type f \
       \( -name "mominer-bin" -o -name "mominer.node" -o -name "*.so" -o -name "*.so.*" \) \
       -print0
   )
@@ -70,8 +75,8 @@ cp -r tests "$package_dir/"
 
 system_path="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 export PATH="$PWD/$package_dir:$system_path"
-if [ -f "$package_dir/libintelocl.so" ]; then
-  export OCL_ICD_FILENAMES="$PWD/$package_dir/libintelocl.so"
+if [ -f "$libs_dir/libintelocl.so" ]; then
+  export OCL_ICD_FILENAMES="$PWD/$libs_dir/libintelocl.so"
 fi
 
 set +e

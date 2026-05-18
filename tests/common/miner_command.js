@@ -102,6 +102,7 @@ function childEnv(extra = {}) {
     if (key.toLowerCase() === "path" && key !== pathKey) delete env[key];
   }
   env[pathKey] = [
+    hasReleaseExecutable ? path.join(path.dirname(releaseExecutable), "libs") : null,
     hasReleaseExecutable ? path.dirname(releaseExecutable) : null,
     path.join(repoRoot, "build", "Release"),
     pathValue,
